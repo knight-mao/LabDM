@@ -288,12 +288,14 @@ function render() {
     const equipment = findEquipment(parts[1]);
     title = equipment ? equipment.name : "设备不存在";
     subtitle = equipment ? `${equipment.assetNo} · ${equipment.model}` : "请检查链接或标签短码";
+    actions = `<button class="btn ghost" data-route="/equipment">返回台账</button>`;
     page = equipment ? detailView(equipment) : notFoundView();
   } else if (parts[0] === "t" && parts[1]) {
     const equipment = state.equipment.find((item) => item.qrTagId === parts[1] || item.nfcTagId === parts[1]);
     page = equipment ? detailView(equipment) : notFoundView(parts[1]);
     title = equipment ? equipment.name : "标签未绑定";
     subtitle = equipment ? `标签 ${parts[1]}` : "该二维码或 NFC 标签还没有绑定设备";
+    actions = `<button class="btn ghost" data-route="/equipment">返回台账</button>`;
   } else if (path === "/scan") {
     title = "扫码识别";
     subtitle = "使用摄像头扫描二维码，或输入标签短码";
