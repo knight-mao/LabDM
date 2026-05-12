@@ -3,6 +3,7 @@ const STORE_KEY = "labdm.mvp.v1";
 const statusMap = {
   in_stock: "在库",
   borrowed: "借出",
+  return_pending: "待归还审核",
   maintenance: "维修",
   scrapped: "报废"
 };
@@ -11,7 +12,9 @@ const actionMap = {
   seed: "初始化",
   create: "入库",
   borrow: "借用",
-  return: "归还",
+  return_request: "申请归还",
+  return_approved: "确认归还",
+  return_rejected: "归还驳回",
   maintenance: "报修",
   restore: "恢复在库",
   scrap: "报废"
@@ -137,6 +140,11 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("change", (event) => {
   const target = event.target.closest("[data-action]");
+  const form = event.target.closest("[data-form='filters']");
+  if (form) {
+    applyFilters(form);
+    return;
+  }
   if (!target) return;
   if (target.dataset.action === "switch-user") {
     state.activeUserId = target.value;
@@ -161,6 +169,8 @@ document.addEventListener("submit", (event) => {
 document.addEventListener("input", (event) => {
   const target = event.target;
   if (target.matches("[data-label-select]")) updateSelectedLabelCount();
+  const form = target.closest("[data-form='filters']");
+  if (form) applyFilters(form, true);
 });
 
 window.addEventListener("beforeunload", stopScanner);
@@ -463,6 +473,21 @@ function statusCounts() {
   }, {});
 }
 
+function applyFilters(form, replace = false) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const params = new URLSearchParams();
+  if (data.q) params.set("q", data.q);
+  if (data.status) params.set("status", data.status);
+  if (data.category) params.set("category", data.category);
+  const path = `/equipment${params.toString() ? `?${params.toString()}` : ""}`;
+  if (replace) {
+    history.replaceState({}, "", path);
+    render();
+    return;
+  }
+  navigate(path);
+}
+
 function equipmentListView() {
   const params = new URLSearchParams(window.location.search);
   const q = params.get("q") || "";
@@ -544,6 +569,7 @@ function detailView(item) {
     .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
   const canBorrow = item.status === "in_stock";
   const canReturn = item.status === "borrowed" && (isAdminUser() || item.currentHolderId === currentUser().id);
+  const canAuditReturn = item.status === "return_pending" && isAdminUser();
   const isAdmin = isAdminUser();
   const canRestoreScrapped = isAdmin && item.status === "scrapped";
   const url = tagUrl(item.qrTagId);
@@ -572,12 +598,15 @@ function detailView(item) {
           <div class="toolbar">
             ${canBorrow ? `<button class="btn primary" data-action="borrow" data-id="${item.id}">申请借用</button>` : ""}
             ${canReturn ? `<button class="btn primary" data-action="return" data-id="${item.id}">确认归还</button>` : ""}
-            ${item.status !== "maintenance" && item.status !== "scrapped" ? `<button class="btn" data-action="maintenance" data-id="${item.id}">报修</button>` : ""}
+            ${canAuditReturn ? `<button class="btn primary" data-action="approve-return" data-id="${item.id}">审核入库</button>` : ""}
+            ${canAuditReturn ? `<button class="btn" data-action="reject-return" data-id="${item.id}">未归还</button>` : ""}
+            ${canAuditReturn ? `<button class="btn" data-action="maintenance" data-id="${item.id}">损坏报修</button>` : ""}
+            ${!["maintenance", "scrapped", "return_pending"].includes(item.status) ? `<button class="btn" data-action="maintenance" data-id="${item.id}">报修</button>` : ""}
             ${isAdmin && item.status === "maintenance" ? `<button class="btn" data-action="restore" data-id="${item.id}">恢复在库</button>` : ""}
             ${canRestoreScrapped ? `<button class="btn" data-action="restore" data-id="${item.id}">恢复在库</button>` : ""}
             ${canRestoreScrapped ? `<button class="btn" data-action="maintenance" data-id="${item.id}">转入维修</button>` : ""}
             ${isAdmin && item.status !== "scrapped" ? `<button class="btn danger" data-action="scrap" data-id="${item.id}">标记报废</button>` : ""}
-            <button class="btn ghost" data-route="/labels">打印标签</button>
+            ${isAdmin ? `<button class="btn ghost" data-route="/labels">打印标签</button>` : ""}
           </div>
         </div>
       </div>
@@ -872,6 +901,8 @@ function handleAction(action, target) {
 
   if (action === "borrow") borrow(item);
   if (action === "return") returnEquipment(item);
+  if (action === "approve-return") approveReturn(item);
+  if (action === "reject-return") rejectReturn(item);
   if (action === "maintenance") markMaintenance(item);
   if (action === "restore") transition(item, "restore", "in_stock", { holder: "", dueAt: "", note: "管理员确认维修完成" });
   if (action === "scrap") markScrap(item);
@@ -882,11 +913,7 @@ function handleSubmit(form) {
   const data = Object.fromEntries(new FormData(form).entries());
 
   if (formType === "filters") {
-    const params = new URLSearchParams();
-    if (data.q) params.set("q", data.q);
-    if (data.status) params.set("status", data.status);
-    if (data.category) params.set("category", data.category);
-    navigate(`/equipment${params.toString() ? `?${params.toString()}` : ""}`);
+    applyFilters(form);
     return;
   }
 
@@ -922,6 +949,11 @@ function handleSubmit(form) {
 
   if (formType === "scrap") {
     submitScrap(data);
+    return;
+  }
+
+  if (formType === "return-request") {
+    submitReturnRequest(data);
     return;
   }
 
@@ -963,12 +995,23 @@ function borrow(item) {
 }
 
 function returnEquipment(item) {
-  const note = prompt("归还备注，可填写设备状态", "设备已归还");
-  if (note === null) return;
-  transition(item, "return", "in_stock", {
+  modal = { type: "return-request", equipmentId: item.id };
+  render();
+}
+
+function approveReturn(item) {
+  transition(item, "return_approved", "in_stock", {
     holder: "",
     dueAt: "",
-    note: note || "设备已归还"
+    note: "管理员审核通过，设备入库"
+  });
+}
+
+function rejectReturn(item) {
+  transition(item, "return_rejected", "borrowed", {
+    holder: item.currentHolderId,
+    dueAt: item.dueAt,
+    note: "管理员确认设备未归还"
   });
 }
 
@@ -1024,6 +1067,18 @@ function submitScrap(data) {
     holder: "",
     dueAt: "",
     note: data.note?.trim() || "管理员标记报废"
+  });
+}
+
+function submitReturnRequest(data) {
+  if (!modal || modal.type !== "return-request") return;
+  const item = findEquipment(modal.equipmentId);
+  if (!item || item.status !== "borrowed") return;
+  modal = null;
+  transition(item, "return_request", "return_pending", {
+    holder: item.currentHolderId,
+    dueAt: item.dueAt,
+    note: data.note?.trim() || "借用人申请归还，等待管理员审核"
   });
 }
 
@@ -1275,6 +1330,30 @@ function modalView() {
                 <textarea name="note" placeholder="可填写用途或实验项目"></textarea>
               </div>
               <button class="btn primary" type="submit">确认出库</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "return-request") {
+    const item = findEquipment(modal.equipmentId);
+    if (!item) return "";
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="return-title">
+          <div class="panel-head">
+            <h3 id="return-title">申请归还</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="return-request">
+              <p class="meta">${escapeHtml(item.name)} 将进入归还审核阶段，等待管理员确认入库。</p>
+              <div class="field">
+                <label>归还备注</label>
+                <textarea name="note" placeholder="可填写设备状态、附件是否齐全、放置位置"></textarea>
+              </div>
+              <button class="btn primary" type="submit">提交归还审核</button>
             </form>
           </div>
         </section>

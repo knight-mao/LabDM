@@ -319,6 +319,11 @@ tr.clickable:hover {
   background: #fef3c7;
 }
 
+.status.return_pending {
+  color: #6d28d9;
+  background: #ede9fe;
+}
+
 .status.maintenance {
   color: #1d4ed8;
   background: #dbeafe;
