@@ -545,6 +545,7 @@ function detailView(item) {
   const canBorrow = item.status === "in_stock";
   const canReturn = item.status === "borrowed" && (isAdminUser() || item.currentHolderId === currentUser().id);
   const isAdmin = isAdminUser();
+  const canRestoreScrapped = isAdmin && item.status === "scrapped";
   const url = tagUrl(item.qrTagId);
 
   return `
@@ -571,8 +572,10 @@ function detailView(item) {
           <div class="toolbar">
             ${canBorrow ? `<button class="btn primary" data-action="borrow" data-id="${item.id}">申请借用</button>` : ""}
             ${canReturn ? `<button class="btn primary" data-action="return" data-id="${item.id}">确认归还</button>` : ""}
-            ${item.status !== "maintenance" ? `<button class="btn" data-action="maintenance" data-id="${item.id}">报修</button>` : ""}
+            ${item.status !== "maintenance" && item.status !== "scrapped" ? `<button class="btn" data-action="maintenance" data-id="${item.id}">报修</button>` : ""}
             ${isAdmin && item.status === "maintenance" ? `<button class="btn" data-action="restore" data-id="${item.id}">恢复在库</button>` : ""}
+            ${canRestoreScrapped ? `<button class="btn" data-action="restore" data-id="${item.id}">恢复在库</button>` : ""}
+            ${canRestoreScrapped ? `<button class="btn" data-action="maintenance" data-id="${item.id}">转入维修</button>` : ""}
             ${isAdmin && item.status !== "scrapped" ? `<button class="btn danger" data-action="scrap" data-id="${item.id}">标记报废</button>` : ""}
             <button class="btn ghost" data-route="/labels">打印标签</button>
           </div>
@@ -871,7 +874,7 @@ function handleAction(action, target) {
   if (action === "return") returnEquipment(item);
   if (action === "maintenance") markMaintenance(item);
   if (action === "restore") transition(item, "restore", "in_stock", { holder: "", dueAt: "", note: "管理员确认维修完成" });
-  if (action === "scrap") transition(item, "scrap", "scrapped", { holder: "", dueAt: "", note: "管理员标记报废" });
+  if (action === "scrap") markScrap(item);
 }
 
 function handleSubmit(form) {
@@ -907,6 +910,21 @@ function handleSubmit(form) {
     return;
   }
 
+  if (formType === "borrow") {
+    submitBorrow(data);
+    return;
+  }
+
+  if (formType === "maintenance") {
+    submitMaintenance(data);
+    return;
+  }
+
+  if (formType === "scrap") {
+    submitScrap(data);
+    return;
+  }
+
   if (formType === "equipment") {
     createEquipment(data);
     return;
@@ -936,17 +954,12 @@ function login(data) {
 }
 
 function borrow(item) {
-  const dueAt = prompt("请输入预计归还日期 YYYY-MM-DD", nextDate(7));
-  if (!dueAt) return;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueAt)) {
-    toast("日期格式应为 YYYY-MM-DD");
+  if (item.requiresApproval) {
+    toast("该设备需要审批，审批流程将在后续版本启用");
     return;
   }
-  transition(item, "borrow", "borrowed", {
-    holder: currentUser().id,
-    dueAt,
-    note: `${currentUser().name} 借用`
-  });
+  modal = { type: "borrow", equipmentId: item.id };
+  render();
 }
 
 function returnEquipment(item) {
@@ -960,12 +973,57 @@ function returnEquipment(item) {
 }
 
 function markMaintenance(item) {
-  const note = prompt("请填写报修说明", item.status === "borrowed" ? "借用期间发现异常" : "设备需要检修");
-  if (note === null) return;
+  modal = { type: "maintenance", equipmentId: item.id };
+  render();
+}
+
+function markScrap(item) {
+  if (!isAdminUser()) {
+    toast("只有管理员可以标记报废");
+    return;
+  }
+  modal = { type: "scrap", equipmentId: item.id };
+  render();
+}
+
+function submitBorrow(data) {
+  if (!modal || modal.type !== "borrow") return;
+  const item = findEquipment(modal.equipmentId);
+  if (!item || item.status !== "in_stock") return;
+  const dueAt = data.dueAt || nextDate(7);
+  modal = null;
+  transition(item, "borrow", "borrowed", {
+    holder: currentUser().id,
+    dueAt,
+    note: data.note?.trim() || `${currentUser().name} 借用`
+  });
+}
+
+function submitMaintenance(data) {
+  if (!modal || modal.type !== "maintenance") return;
+  const item = findEquipment(modal.equipmentId);
+  if (!item) return;
+  modal = null;
   transition(item, "maintenance", "maintenance", {
     holder: "",
     dueAt: "",
-    note
+    note: data.note?.trim() || "设备需要检修"
+  });
+}
+
+function submitScrap(data) {
+  if (!modal || modal.type !== "scrap") return;
+  const item = findEquipment(modal.equipmentId);
+  if (!item || !isAdminUser()) return;
+  if (data.confirm !== item.assetNo) {
+    toast("请输入资产编号确认报废");
+    return;
+  }
+  modal = null;
+  transition(item, "scrap", "scrapped", {
+    holder: "",
+    dueAt: "",
+    note: data.note?.trim() || "管理员标记报废"
   });
 }
 
@@ -1189,6 +1247,86 @@ function modalView() {
                 <input name="password" type="password" autocomplete="new-password" required autofocus />
               </div>
               <button class="btn primary" type="submit">保存新密码</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "borrow") {
+    const item = findEquipment(modal.equipmentId);
+    if (!item) return "";
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="borrow-title">
+          <div class="panel-head">
+            <h3 id="borrow-title">确认借用</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="borrow">
+              <p class="meta">${escapeHtml(item.name)} 将直接标记为出库，借用人为 ${escapeHtml(currentUser().name)}。</p>
+              <div class="field">
+                <label>预计归还日期</label>
+                <input name="dueAt" type="date" value="${nextDate(7)}" required />
+              </div>
+              <div class="field">
+                <label>借用备注</label>
+                <textarea name="note" placeholder="可填写用途或实验项目"></textarea>
+              </div>
+              <button class="btn primary" type="submit">确认出库</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "maintenance") {
+    const item = findEquipment(modal.equipmentId);
+    if (!item) return "";
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="maintenance-title">
+          <div class="panel-head">
+            <h3 id="maintenance-title">设备报修</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="maintenance">
+              <p class="meta">${escapeHtml(item.name)} 将转入维修状态。</p>
+              <div class="field">
+                <label>报修说明</label>
+                <textarea name="note" required placeholder="请描述故障、异常现象或维修原因"></textarea>
+              </div>
+              <button class="btn primary" type="submit">提交报修</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "scrap") {
+    const item = findEquipment(modal.equipmentId);
+    if (!item) return "";
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="scrap-title">
+          <div class="panel-head">
+            <h3 id="scrap-title">确认报废</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="scrap">
+              <p class="meta">报废会记录审计流水。报废后管理员仍可恢复在库或转入维修。</p>
+              <div class="field">
+                <label>输入资产编号确认</label>
+                <input name="confirm" required placeholder="${escapeAttr(item.assetNo)}" />
+              </div>
+              <div class="field">
+                <label>报废原因</label>
+                <textarea name="note" required placeholder="例如损坏不可修复、达到报废年限"></textarea>
+              </div>
+              <button class="btn danger" type="submit">确认标记报废</button>
             </form>
           </div>
         </section>
