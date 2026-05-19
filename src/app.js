@@ -1171,11 +1171,14 @@ function submitBorrow(data) {
   const item = findEquipment(modal.equipmentId);
   if (!item || item.status !== "in_stock") return;
   const dueAt = data.dueAt || nextDate(7);
+  const destinationId = data.destinationLocationId || item.locationId;
+  const note = data.note?.trim() || `${currentUser().name} 借用`;
   modal = null;
   transition(item, "borrow", "borrowed", {
     holder: currentUser().id,
     dueAt,
-    note: data.note?.trim() || `${currentUser().name} 借用`
+    locationId: destinationId,
+    note: `${note}；设备去向：${locationName(destinationId)}`
   });
 }
 
@@ -1277,6 +1280,7 @@ function transition(item, action, toStatus, details) {
   item.status = toStatus;
   item.currentHolderId = details.holder;
   item.dueAt = details.dueAt;
+  if (details.locationId !== undefined) item.locationId = details.locationId;
   state.events.push({
     id: crypto.randomUUID(),
     equipmentId: item.id,
@@ -1721,6 +1725,12 @@ function modalView() {
               <div class="field">
                 <label>预计归还日期</label>
                 <input name="dueAt" type="date" value="${nextDate(7)}" required />
+              </div>
+              <div class="field">
+                <label>设备去向</label>
+                <select name="destinationLocationId" required>
+                  ${state.locations.map((location) => `<option value="${location.id}" ${location.id === item.locationId ? "selected" : ""}>${escapeHtml(location.name)}</option>`).join("")}
+                </select>
               </div>
               <div class="field">
                 <label>借用备注</label>
