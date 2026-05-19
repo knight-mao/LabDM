@@ -1,9 +1,5 @@
-const CACHE_NAME = "labdm-v2";
+const CACHE_NAME = "labdm-v3";
 const ASSETS = [
-  "/",
-  "/index.html",
-  "/styles.css",
-  "/src/app.js",
   "/manifest.webmanifest",
   "/icons/icon.svg"
 ];
