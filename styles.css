@@ -346,6 +346,15 @@ tr.clickable:hover {
   gap: 12px;
 }
 
+.equipment-image {
+  width: min(100%, 560px);
+  max-height: 360px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
 .kv {
   display: grid;
   grid-template-columns: 120px 1fr;
@@ -512,6 +521,17 @@ tr.clickable:hover {
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
+}
+
+.delete-list {
+  max-height: 180px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
 }
 
 .label-card img {

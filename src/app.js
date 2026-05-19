@@ -121,6 +121,7 @@ window.addEventListener("hashchange", render);
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-route],[data-action],[data-equipment]");
   if (!target) return;
+  if (event.target.matches("input, select, textarea, label") && !target.dataset.action) return;
 
   if (target.dataset.route) {
     event.preventDefault();
@@ -219,7 +220,7 @@ function nextDate(days) {
 }
 
 function currentUser() {
-  return state.users.find((user) => user.id === state.activeUserId) || state.users[0];
+  return state.users.find((user) => user.id === state.activeUserId) || null;
 }
 
 function isLoggedIn() {
@@ -227,11 +228,11 @@ function isLoggedIn() {
 }
 
 function isAdminUser() {
-  return ["admin", "superadmin"].includes(currentUser().role);
+  return isLoggedIn() && ["admin", "superadmin"].includes(currentUser().role);
 }
 
 function isSuperAdmin() {
-  return currentUser().role === "superadmin";
+  return isLoggedIn() && currentUser().role === "superadmin";
 }
 
 function locationName(id) {
@@ -256,18 +257,20 @@ function route() {
 }
 
 function render() {
-  if (!isLoggedIn()) {
+  const { path, parts } = route();
+  const isPublicDetail = (parts[0] === "equipment" && parts[1]) || (parts[0] === "t" && parts[1]);
+
+  if (!isLoggedIn() && !isPublicDetail && path !== "/register" && path !== "/login") {
     stopScanner();
     app.innerHTML = loginView();
     return;
   }
 
-  const { path, parts } = route();
   const nav = [
     ["dashboard", "总览", "/"],
     ["equipment", "设备", "/equipment"],
     ["scan", "扫码", "/scan"],
-    ["labels", "标签", "/labels"],
+    ...(isAdminUser() ? [["labels", "标签", "/labels"]] : []),
     ...(isAdminUser() ? [["admin", "录入", "/admin"]] : []),
     ...(isAdminUser() ? [["accounts", "账户", "/accounts"]] : [])
   ];
@@ -282,7 +285,7 @@ function render() {
   } else if (path === "/equipment") {
     title = "设备台账";
     subtitle = "按名称、资产编号、分类和状态查询设备";
-    actions = isAdminUser() ? `<button class="btn primary" data-route="/admin">新增设备</button>` : "";
+    actions = `${isSuperAdmin() ? `<button class="btn danger" data-action="delete-selected-equipment">删除已选</button>` : ""}${isAdminUser() ? `<button class="btn primary" data-route="/admin">新增设备</button>` : ""}`;
     page = equipmentListView();
   } else if (parts[0] === "equipment" && parts[1]) {
     const equipment = findEquipment(parts[1]);
@@ -345,8 +348,8 @@ function render() {
             <p>${escapeHtml(subtitle)}</p>
           </div>
           <div class="toolbar">
-            <span class="user-badge">${escapeHtml(currentUser().name)} · ${roleMap[currentUser().role]}</span>
-            <button class="btn ghost" data-action="logout">退出</button>
+            ${isLoggedIn() ? `<span class="user-badge">${escapeHtml(currentUser().name)} · ${roleMap[currentUser().role]}</span>` : ""}
+            ${isLoggedIn() ? `<button class="btn ghost" data-action="logout">退出</button>` : `<button class="btn primary" data-route="/login?next=${encodeURIComponent(path)}">登录</button>`}
             ${actions}
           </div>
         </header>
@@ -429,7 +432,7 @@ function navIcon(key) {
     scan: "⌕",
     admin: "+",
     labels: "▣",
-    accounts: roleMap[currentUser().role] || "账户"
+    accounts: isLoggedIn() ? roleMap[currentUser().role] : "账户"
   };
   return `<span aria-hidden="true">${icons[key]}</span>`;
 }
@@ -536,10 +539,12 @@ function filterEquipment(q, status, category) {
 
 function equipmentTable(items) {
   if (!items.length) return `<div class="empty">没有匹配设备</div>`;
+  const canDelete = isSuperAdmin();
   return `
     <table>
       <thead>
         <tr>
+          ${canDelete ? `<th><input type="checkbox" data-action="toggle-equipment-selection" aria-label="全选设备" /></th>` : ""}
           <th>设备</th>
           <th>状态</th>
           <th>位置</th>
@@ -552,6 +557,7 @@ function equipmentTable(items) {
           .map(
             (item) => `
               <tr class="clickable" data-equipment="${item.id}">
+                ${canDelete ? `<td><input type="checkbox" data-equipment-select value="${item.id}" aria-label="选择 ${escapeAttr(item.name)}" /></td>` : ""}
                 <td><strong>${escapeHtml(item.name)}</strong><div class="meta">${escapeHtml(item.assetNo)} · ${escapeHtml(item.model)}</div></td>
                 <td>${statusPill(item.status)}</td>
                 <td>${escapeHtml(locationName(item.locationId))}</td>
@@ -587,6 +593,7 @@ function detailView(item) {
           ${statusPill(item.status)}
         </div>
         <div class="panel-body grid">
+          ${item.imageUrl ? `<img class="equipment-image" src="${escapeAttr(item.imageUrl)}" alt="${escapeAttr(item.name)}" />` : ""}
           <dl class="kv">
             <dt>型号</dt><dd>${escapeHtml(item.model)}</dd>
             <dt>位置</dt><dd>${escapeHtml(locationName(item.locationId))}</dd>
@@ -608,6 +615,7 @@ function detailView(item) {
             ${canRestoreScrapped ? `<button class="btn" data-action="restore" data-id="${item.id}">恢复在库</button>` : ""}
             ${canRestoreScrapped ? `<button class="btn" data-action="maintenance" data-id="${item.id}">转入维修</button>` : ""}
             ${isAdmin && item.status !== "scrapped" ? `<button class="btn danger" data-action="scrap" data-id="${item.id}">标记报废</button>` : ""}
+            ${isSuperAdmin() ? `<button class="btn danger" data-action="delete-equipment" data-id="${item.id}">删除设备</button>` : ""}
             ${isAdmin ? `<button class="btn ghost" data-route="/labels">打印标签</button>` : ""}
           </div>
         </div>
@@ -692,6 +700,10 @@ function adminView() {
           <div class="field">
             <label>NFC短码</label>
             <input name="nfcTagId" placeholder="可留空，后续绑定" />
+          </div>
+          <div class="field wide">
+            <label>设备图片 URL</label>
+            <input name="imageUrl" type="url" placeholder="可选，例如 https://example.com/device.jpg" />
           </div>
           <div class="field wide">
             <label>备注</label>
@@ -886,6 +898,10 @@ function handleAction(action, target) {
 
   if (action === "reset-password") return resetPassword(target.dataset.id);
 
+  if (action === "toggle-equipment-selection") return toggleEquipmentSelection(target.checked);
+
+  if (action === "delete-selected-equipment") return deleteSelectedEquipment();
+
   if (action === "start-scan") {
     startScanner();
     return;
@@ -901,6 +917,11 @@ function handleAction(action, target) {
   const item = findEquipment(id);
   if (!item) return;
 
+  if (!isLoggedIn()) {
+    navigate(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+    return;
+  }
+
   if (action === "borrow") borrow(item);
   if (action === "return") returnEquipment(item);
   if (action === "approve-return") approveReturn(item);
@@ -908,6 +929,7 @@ function handleAction(action, target) {
   if (action === "maintenance") markMaintenance(item);
   if (action === "restore") transition(item, "restore", "in_stock", { holder: "", dueAt: "", note: "管理员确认维修完成" });
   if (action === "scrap") markScrap(item);
+  if (action === "delete-equipment") deleteEquipment(item);
 }
 
 function handleSubmit(form) {
@@ -959,6 +981,11 @@ function handleSubmit(form) {
     return;
   }
 
+  if (formType === "delete-equipment") {
+    submitDeleteEquipment(data);
+    return;
+  }
+
   if (formType === "equipment") {
     createEquipment(data);
     return;
@@ -984,7 +1011,8 @@ function login(data) {
   }
   state.activeUserId = user.id;
   saveState();
-  navigate("/");
+  const next = new URLSearchParams(window.location.search).get("next");
+  navigate(next || "/");
 }
 
 function borrow(item) {
@@ -1084,6 +1112,50 @@ function submitReturnRequest(data) {
   });
 }
 
+function deleteEquipment(item) {
+  if (!isSuperAdmin()) {
+    toast("只有超级管理员可以删除设备");
+    return;
+  }
+  modal = { type: "delete-equipment", equipmentIds: [item.id] };
+  render();
+}
+
+function deleteSelectedEquipment() {
+  if (!isSuperAdmin()) {
+    toast("只有超级管理员可以删除设备");
+    return;
+  }
+  const equipmentIds = [...document.querySelectorAll("[data-equipment-select]:checked")].map((input) => input.value);
+  if (!equipmentIds.length) {
+    toast("请先选择要删除的设备");
+    return;
+  }
+  modal = { type: "delete-equipment", equipmentIds };
+  render();
+}
+
+function submitDeleteEquipment(data) {
+  if (!modal || modal.type !== "delete-equipment" || !isSuperAdmin()) return;
+  const ids = new Set(modal.equipmentIds);
+  if (data.confirm !== "DELETE") {
+    toast("请输入 DELETE 确认删除");
+    return;
+  }
+  state.equipment = state.equipment.filter((item) => !ids.has(item.id));
+  state.events = state.events.filter((event) => !ids.has(event.equipmentId));
+  saveState();
+  modal = null;
+  toast("设备已删除");
+  navigate("/equipment");
+}
+
+function toggleEquipmentSelection(checked) {
+  document.querySelectorAll("[data-equipment-select]").forEach((input) => {
+    input.checked = checked;
+  });
+}
+
 function transition(item, action, toStatus, details) {
   const fromStatus = item.status;
   item.status = toStatus;
@@ -1124,7 +1196,7 @@ function createEquipment(data) {
     nfcTagId: data.nfcTagId.trim(),
     purchaseDate: data.purchaseDate,
     price: Number(data.price || 0),
-    imageUrl: "",
+    imageUrl: data.imageUrl.trim(),
     dueAt: "",
     note: data.note.trim()
   };
@@ -1408,6 +1480,32 @@ function modalView() {
                 <textarea name="note" required placeholder="例如损坏不可修复、达到报废年限"></textarea>
               </div>
               <button class="btn danger" type="submit">确认标记报废</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "delete-equipment") {
+    const items = state.equipment.filter((item) => modal.equipmentIds.includes(item.id));
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+          <div class="panel-head">
+            <h3 id="delete-title">删除设备</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="delete-equipment">
+              <p class="meta">将删除 ${items.length} 台设备及其本地审计流水。此操作仅限超级管理员。</p>
+              <div class="delete-list">
+                ${items.map((item) => `<div><strong>${escapeHtml(item.name)}</strong><span class="meta"> ${escapeHtml(item.assetNo)}</span></div>`).join("")}
+              </div>
+              <div class="field">
+                <label>输入 DELETE 确认删除</label>
+                <input name="confirm" required autocomplete="off" />
+              </div>
+              <button class="btn danger" type="submit">确认删除</button>
             </form>
           </div>
         </section>
