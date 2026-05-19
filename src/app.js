@@ -26,8 +26,32 @@ const roleMap = {
   user: "学生"
 };
 
+const formalTripods = [
+  { id: "eq-tripod-202605006", assetNo: "LAB-202605006", qrTagId: "tag-37fc2c58" },
+  { id: "eq-tripod-202605005", assetNo: "LAB-202605005", qrTagId: "tag-3373af8f" },
+  { id: "eq-tripod-202605004", assetNo: "LAB-202605004", qrTagId: "tag-faed8eec" },
+  { id: "eq-tripod-202605003", assetNo: "LAB-202605003", qrTagId: "tag-09616e5f" },
+  { id: "eq-tripod-202605002", assetNo: "LAB-202605002", qrTagId: "tag-815fd7ac" },
+  { id: "eq-tripod-202605001", assetNo: "LAB-202605001", qrTagId: "tag-2d8555a1" }
+].map((item) => ({
+  ...item,
+  name: "FutureSportsLab-.-三脚架",
+  model: "VCT-999",
+  category: "常规设备",
+  status: "in_stock",
+  locationId: "loc-store",
+  currentHolderId: "",
+  nfcTagId: "",
+  purchaseDate: "",
+  price: 0,
+  imageUrl: "",
+  dueAt: "",
+  note: ""
+}));
+
 const seed = {
   authVersion: 2,
+  catalogVersion: 2,
   activeUserId: "",
   users: [
     { id: "u-knight", username: "Knight", password: "twd416", name: "Knight", email: "knight@lab.local", role: "superadmin", department: "中心实验室" },
@@ -41,6 +65,7 @@ const seed = {
   ],
   categories: ["精密仪器", "常规设备", "工具附件"],
   equipment: [
+    ...formalTripods,
     {
       id: "eq-centrifuge-01",
       name: "高速冷冻离心机",
@@ -160,11 +185,11 @@ document.addEventListener("change", (event) => {
   }
 });
 
-document.addEventListener("submit", (event) => {
+document.addEventListener("submit", async (event) => {
   const form = event.target;
   if (!(form instanceof HTMLFormElement)) return;
   event.preventDefault();
-  handleSubmit(form);
+  await handleSubmit(form);
 });
 
 document.addEventListener("input", (event) => {
@@ -190,11 +215,25 @@ function loadState() {
     const merged = { ...structuredClone(seed), ...parsed };
     if (parsed.authVersion !== seed.authVersion) merged.activeUserId = "";
     merged.authVersion = seed.authVersion;
+    if (parsed.catalogVersion !== seed.catalogVersion) {
+      merged.equipment = ensureCatalogEquipment(merged.equipment || []);
+    }
+    merged.catalogVersion = seed.catalogVersion;
     merged.users = ensureSeedUsers(merged.users || []);
     return merged;
   } catch {
     return structuredClone(seed);
   }
+}
+
+function ensureCatalogEquipment(equipment) {
+  const byAssetNo = new Map(equipment.map((item) => [item.assetNo, item]));
+  for (const item of formalTripods) {
+    if (!byAssetNo.has(item.assetNo)) {
+      equipment.unshift(item);
+    }
+  }
+  return equipment;
 }
 
 function ensureSeedUsers(users) {
@@ -702,8 +741,9 @@ function adminView() {
             <input name="nfcTagId" placeholder="可留空，后续绑定" />
           </div>
           <div class="field wide">
-            <label>设备图片 URL</label>
-            <input name="imageUrl" type="url" placeholder="可选，例如 https://example.com/device.jpg" />
+            <label>设备图片</label>
+            <input name="imageFile" type="file" accept="image/*" capture="environment" />
+            <span class="meta">可拍照或从本地选择图片。当前 MVP 会保存在本机浏览器中。</span>
           </div>
           <div class="field wide">
             <label>备注</label>
@@ -932,7 +972,7 @@ function handleAction(action, target) {
   if (action === "delete-equipment") deleteEquipment(item);
 }
 
-function handleSubmit(form) {
+async function handleSubmit(form) {
   const formType = form.dataset.form;
   const data = Object.fromEntries(new FormData(form).entries());
 
@@ -987,7 +1027,7 @@ function handleSubmit(form) {
   }
 
   if (formType === "equipment") {
-    createEquipment(data);
+    await createEquipment(data);
     return;
   }
 
@@ -1156,6 +1196,15 @@ function toggleEquipmentSelection(checked) {
   });
 }
 
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(reader.result));
+    reader.addEventListener("error", reject);
+    reader.readAsDataURL(file);
+  });
+}
+
 function transition(item, action, toStatus, details) {
   const fromStatus = item.status;
   item.status = toStatus;
@@ -1177,9 +1226,15 @@ function transition(item, action, toStatus, details) {
   render();
 }
 
-function createEquipment(data) {
+async function createEquipment(data) {
   if (!isAdminUser()) {
     toast("只有管理员可以录入设备");
+    return;
+  }
+
+  const imageFile = data.imageFile instanceof File && data.imageFile.size > 0 ? data.imageFile : null;
+  if (imageFile && imageFile.size > 2 * 1024 * 1024) {
+    toast("图片不能超过 2MB");
     return;
   }
 
@@ -1196,7 +1251,7 @@ function createEquipment(data) {
     nfcTagId: data.nfcTagId.trim(),
     purchaseDate: data.purchaseDate,
     price: Number(data.price || 0),
-    imageUrl: data.imageUrl.trim(),
+    imageUrl: imageFile ? await fileToDataUrl(imageFile) : "",
     dueAt: "",
     note: data.note.trim()
   };
