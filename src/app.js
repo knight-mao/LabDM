@@ -299,6 +299,12 @@ function render() {
   const { path, parts } = route();
   const isPublicDetail = (parts[0] === "equipment" && parts[1]) || (parts[0] === "t" && parts[1]);
 
+  if (!isLoggedIn() && (path === "/login" || path === "/register")) {
+    stopScanner();
+    app.innerHTML = loginView();
+    return;
+  }
+
   if (!isLoggedIn() && !isPublicDetail && path !== "/register" && path !== "/login") {
     stopScanner();
     app.innerHTML = loginView();
@@ -330,14 +336,14 @@ function render() {
     const equipment = findEquipment(parts[1]);
     title = equipment ? equipment.name : "设备不存在";
     subtitle = equipment ? `${equipment.assetNo} · ${equipment.model}` : "请检查链接或标签短码";
-    actions = `<button class="btn ghost" data-route="/equipment">返回台账</button>`;
+    actions = isLoggedIn() ? `<button class="btn ghost" data-route="/equipment">返回台账</button>` : "";
     page = equipment ? detailView(equipment) : notFoundView();
   } else if (parts[0] === "t" && parts[1]) {
     const equipment = state.equipment.find((item) => item.qrTagId === parts[1] || item.nfcTagId === parts[1]);
     page = equipment ? detailView(equipment) : notFoundView(parts[1]);
     title = equipment ? equipment.name : "标签未绑定";
     subtitle = equipment ? `标签 ${parts[1]}` : "该二维码或 NFC 标签还没有绑定设备";
-    actions = `<button class="btn ghost" data-route="/equipment">返回台账</button>`;
+    actions = isLoggedIn() ? `<button class="btn ghost" data-route="/equipment">返回台账</button>` : "";
   } else if (path === "/scan") {
     title = "扫码识别";
     subtitle = "使用摄像头扫描二维码，或输入标签短码";
@@ -349,7 +355,14 @@ function render() {
   } else if (path === "/labels") {
     title = "标签打印";
     subtitle = "勾选需要打印的标签，打印时只输出已选二维码";
-    actions = `<button class="btn primary no-print" data-action="print-selected">打印已选</button>`;
+    actions = `
+      <select class="no-print" id="label-export-format" aria-label="标签导出格式">
+        <option value="svg">图片(SVG)</option>
+        <option value="wdfx">WDFX</option>
+      </select>
+      <button class="btn no-print" data-action="export-labels">导出已选</button>
+      <button class="btn primary no-print" data-action="print-selected">打印已选</button>
+    `;
     page = labelsView();
   } else if (path === "/accounts") {
     title = "账户与类别管理";
@@ -934,6 +947,8 @@ function handleAction(action, target) {
 
   if (action === "print-selected") return printSelectedLabels();
 
+  if (action === "export-labels") return exportSelectedLabels();
+
   if (action === "change-role") return changeRole(target.dataset.id, target.value);
 
   if (action === "reset-password") return resetPassword(target.dataset.id);
@@ -1404,6 +1419,107 @@ function printSelectedLabels() {
   document.querySelectorAll("[data-label-card]").forEach((card) => card.classList.remove("print-hidden"));
 }
 
+async function exportSelectedLabels() {
+  const items = selectedLabelItems();
+  if (!items.length) {
+    toast("请先勾选要导出的标签");
+    return;
+  }
+  const format = document.querySelector("#label-export-format")?.value || "svg";
+  if (format === "wdfx") {
+    await exportWdfxLabels(items);
+    return;
+  }
+  exportSvgLabels(items);
+}
+
+function selectedLabelItems() {
+  const ids = [...document.querySelectorAll("[data-label-select]:checked")].map((input) => input.value);
+  return state.equipment.filter((item) => ids.includes(item.id));
+}
+
+function exportSvgLabels(items) {
+  const width = 420;
+  const height = 620;
+  const gap = 24;
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width * items.length + gap * Math.max(0, items.length - 1)}" height="${height}" viewBox="0 0 ${width * items.length + gap * Math.max(0, items.length - 1)} ${height}">
+  <style>
+    text { font-family: Arial, "Microsoft YaHei", sans-serif; fill: #111827; }
+    .title { font-size: 24px; font-weight: 700; }
+    .meta { font-size: 18px; fill: #334155; }
+    .code { font-size: 14px; font-family: Consolas, monospace; }
+  </style>
+  ${items
+    .map((item, index) => {
+      const x = index * (width + gap);
+      const url = tagUrl(item.qrTagId);
+      const qr = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(url)}`;
+      return `
+  <g transform="translate(${x},0)">
+    <rect x="1" y="1" width="${width - 2}" height="${height - 2}" rx="10" fill="#fff" stroke="#94a3b8" stroke-dasharray="4 4"/>
+    <text class="title" x="24" y="52">${escapeXml(item.name)}</text>
+    <text class="meta" x="24" y="88">${escapeXml(item.assetNo)}</text>
+    <image href="${qr}" x="80" y="118" width="260" height="260"/>
+    <text class="code" x="24" y="420">${escapeXml(item.qrTagId)}</text>
+    <text class="code" x="24" y="456">${escapeXml(url)}</text>
+  </g>`;
+    })
+    .join("")}
+</svg>`;
+  downloadBlob(svg, "labdm-labels.svg", "image/svg+xml;charset=utf-8");
+}
+
+async function exportWdfxLabels(items) {
+  const response = await fetch("/templates/%E5%AE%9E%E9%AA%8C%E5%AE%A4%E8%AE%BE%E5%A4%87%E6%A0%87%E7%AD%BE.wdfx");
+  if (!response.ok) {
+    toast("无法读取 WDFX 模板");
+    return;
+  }
+  const source = await response.text();
+  const doc = new DOMParser().parseFromString(source, "application/xml");
+  const root = doc.querySelector("LPAPI");
+  const templatePage = root?.querySelector("Page");
+  if (!root || !templatePage) {
+    toast("WDFX 模板结构无效");
+    return;
+  }
+  root.querySelectorAll("Page").forEach((page) => page.remove());
+
+  for (const item of items) {
+    const page = templatePage.cloneNode(true);
+    page.querySelectorAll("Qrcode content").forEach((node) => {
+      node.textContent = tagUrl(item.qrTagId);
+    });
+    page.querySelectorAll("Text content").forEach((node) => {
+      if (node.textContent.startsWith("设备名称：")) node.textContent = `设备名称：${labelDeviceName(item)}`;
+      if (node.textContent.startsWith("设备编号：")) node.textContent = `设备编号：${item.assetNo}`;
+    });
+    root.appendChild(page);
+  }
+
+  const body = new XMLSerializer().serializeToString(root);
+  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${body}`;
+  downloadBlob(xml, "labdm-labels.wdfx", "application/xml;charset=utf-8");
+}
+
+function labelDeviceName(item) {
+  if (item.name.includes("三脚架")) return "三脚架";
+  return item.name;
+}
+
+function downloadBlob(content, filename, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function updateSelectedLabelCount() {
   const el = document.querySelector("#selected-label-count");
   if (!el) return;
@@ -1665,6 +1781,15 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function escapeXml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 }
 
 function escapeAttr(value) {
