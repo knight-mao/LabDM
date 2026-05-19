@@ -1485,6 +1485,12 @@ async function exportWdfxLabels(items) {
 
   for (const item of items) {
     const doc = new DOMParser().parseFromString(source, "application/xml");
+    doc.querySelectorAll("LPAPI > labelName").forEach((node) => {
+      node.textContent = item.assetNo;
+    });
+    doc.querySelectorAll("LPAPI > internationalName").forEach((node) => {
+      node.textContent = `zh=${item.assetNo}`;
+    });
     doc.querySelectorAll("Qrcode content").forEach((node) => {
       node.textContent = tagUrl(item.qrTagId);
     });
