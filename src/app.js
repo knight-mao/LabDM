@@ -1477,30 +1477,25 @@ async function exportWdfxLabels(items) {
     return;
   }
   const source = await response.text();
-  const doc = new DOMParser().parseFromString(source, "application/xml");
-  const root = doc.querySelector("LPAPI");
-  const templatePage = root?.querySelector("Page");
-  if (!root || !templatePage) {
+  const templateDoc = new DOMParser().parseFromString(source, "application/xml");
+  if (!templateDoc.querySelector("LPAPI > Page")) {
     toast("WDFX 模板结构无效");
     return;
   }
-  root.querySelectorAll("Page").forEach((page) => page.remove());
 
   for (const item of items) {
-    const page = templatePage.cloneNode(true);
-    page.querySelectorAll("Qrcode content").forEach((node) => {
+    const doc = new DOMParser().parseFromString(source, "application/xml");
+    doc.querySelectorAll("Qrcode content").forEach((node) => {
       node.textContent = tagUrl(item.qrTagId);
     });
-    page.querySelectorAll("Text content").forEach((node) => {
+    doc.querySelectorAll("Text content").forEach((node) => {
       if (node.textContent.startsWith("设备名称：")) node.textContent = `设备名称：${labelDeviceName(item)}`;
       if (node.textContent.startsWith("设备编号：")) node.textContent = `设备编号：${item.assetNo}`;
     });
-    root.appendChild(page);
+    const body = new XMLSerializer().serializeToString(doc.documentElement);
+    const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${body}`;
+    downloadBlob(xml, `${safeFilename(item.assetNo)}.wdfx`, "application/xml;charset=utf-8");
   }
-
-  const body = new XMLSerializer().serializeToString(root);
-  const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${body}`;
-  downloadBlob(xml, "labdm-labels.wdfx", "application/xml;charset=utf-8");
 }
 
 function labelDeviceName(item) {
@@ -1518,6 +1513,12 @@ function downloadBlob(content, filename, type) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function safeFilename(value) {
+  return String(value || "labdm-label")
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-");
 }
 
 function updateSelectedLabelCount() {
