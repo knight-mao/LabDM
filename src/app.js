@@ -625,8 +625,8 @@ function equipmentTable(items) {
                 <td><strong>${escapeHtml(item.name)}</strong><div class="meta">${escapeHtml(item.assetNo)} · ${escapeHtml(item.model)}</div></td>
                 <td>${statusPill(item.status)}</td>
                 <td>${escapeHtml(locationName(item.locationId))}</td>
-                <td>${escapeHtml(userName(item.currentHolderId))}</td>
-                <td>${item.dueAt ? escapeHtml(item.dueAt) : "无"}</td>
+                <td>${item.currentHolderId ? escapeHtml(userName(item.currentHolderId)) : "未借出"}</td>
+                <td>${item.dueAt ? escapeHtml(item.dueAt) : "无应还日期"}</td>
               </tr>`
           )
           .join("")}
@@ -909,9 +909,14 @@ function accountsTable() {
         ${state.users.map((user) => {
           const canEditRole = isSuperAdmin() && user.id !== currentUser().id;
           const canManage = user.id !== currentUser().id && (isSuperAdmin() || user.role === "user");
+          const canDelete = canDeleteUser(user);
           return `
             <tr>
-              <td><strong>${escapeHtml(user.name)}</strong><div class="meta">${escapeHtml(user.username)} · ${escapeHtml(user.email || "无邮箱")}</div></td>
+              <td>
+                <strong>${escapeHtml(user.name)}</strong>
+                <div class="meta">用户名：${escapeHtml(user.username)}；邮箱：${escapeHtml(user.email || "无邮箱")}</div>
+                ${isSuperAdmin() ? `<div class="meta">当前密码：${escapeHtml(user.password)}</div>` : ""}
+              </td>
               <td>
                 ${canEditRole ? `
                   <select data-action="change-role" data-id="${user.id}">
@@ -926,6 +931,7 @@ function accountsTable() {
               </td>
               <td>
                 ${canManage ? `<button class="btn" data-action="reset-password" data-id="${user.id}">重置密码</button>` : ""}
+                ${canDelete ? `<button class="btn danger" data-action="delete-user" data-id="${user.id}">注销账户</button>` : ""}
               </td>
             </tr>
           `;
@@ -996,7 +1002,11 @@ function handleAction(action, target) {
 
   if (action === "reset-password") return resetPassword(target.dataset.id);
 
+  if (action === "delete-user") return deleteUser(target.dataset.id);
+
   if (action === "toggle-equipment-selection") return toggleEquipmentSelection(target.checked);
+
+  if (action === "add-borrow-location") return addBorrowLocation();
 
   if (action === "delete-selected-equipment") return deleteSelectedEquipment();
 
@@ -1060,6 +1070,11 @@ async function handleSubmit(form) {
 
   if (formType === "reset-password") {
     submitResetPassword(data);
+    return;
+  }
+
+  if (formType === "delete-user") {
+    submitDeleteUser(data);
     return;
   }
 
@@ -1471,6 +1486,60 @@ function deleteLocation(id) {
   render();
 }
 
+function canDeleteUser(user) {
+  if (!user || user.id === currentUser().id || user.role === "superadmin") return false;
+  return isSuperAdmin() || (isAdminUser() && user.role === "user");
+}
+
+function deleteUser(userId) {
+  const user = state.users.find((item) => item.id === userId);
+  if (!canDeleteUser(user)) {
+    toast("没有权限注销该账户");
+    return;
+  }
+  if (state.equipment.some((item) => item.currentHolderId === userId)) {
+    toast("该账户仍持有设备，不能注销");
+    return;
+  }
+  modal = { type: "delete-user", userId };
+  render();
+}
+
+function submitDeleteUser(data) {
+  if (!modal || modal.type !== "delete-user") return;
+  const user = state.users.find((item) => item.id === modal.userId);
+  if (!canDeleteUser(user)) return;
+  if (data.confirm !== user.username) {
+    toast("请输入用户名确认注销");
+    return;
+  }
+  state.users = state.users.filter((item) => item.id !== user.id);
+  saveState();
+  modal = null;
+  toast("账户已注销");
+  render();
+}
+
+function addBorrowLocation() {
+  if (!modal || modal.type !== "borrow" || !isAdminUser()) return;
+  const input = document.querySelector("#borrow-new-location");
+  const name = input?.value.trim();
+  if (!name) {
+    toast("请输入新位置名称");
+    return;
+  }
+  if (state.locations.some((location) => location.name === name)) {
+    toast("位置已存在");
+    return;
+  }
+  const location = { id: `loc-${crypto.randomUUID().slice(0, 8)}`, name };
+  state.locations.push(location);
+  modal.destinationLocationId = location.id;
+  saveState();
+  toast("位置已添加");
+  render();
+}
+
 function nextAssetNo() {
   let max = 0;
   let width = 9;
@@ -1712,6 +1781,7 @@ function modalView() {
   if (modal.type === "borrow") {
     const item = findEquipment(modal.equipmentId);
     if (!item) return "";
+    const selectedDestination = modal.destinationLocationId || item.locationId;
     return `
       <div class="modal-backdrop" role="presentation">
         <section class="modal" role="dialog" aria-modal="true" aria-labelledby="borrow-title">
@@ -1729,14 +1799,47 @@ function modalView() {
               <div class="field">
                 <label>设备去向</label>
                 <select name="destinationLocationId" required>
-                  ${state.locations.map((location) => `<option value="${location.id}" ${location.id === item.locationId ? "selected" : ""}>${escapeHtml(location.name)}</option>`).join("")}
+                  ${state.locations.map((location) => `<option value="${location.id}" ${location.id === selectedDestination ? "selected" : ""}>${escapeHtml(location.name)}</option>`).join("")}
                 </select>
               </div>
+              ${isAdminUser() ? `
+                <div class="field">
+                  <label>新增放置位置</label>
+                  <div class="inline-action">
+                    <input id="borrow-new-location" placeholder="例如 科研楼315" />
+                    <button class="btn" type="button" data-action="add-borrow-location">添加</button>
+                  </div>
+                </div>
+              ` : ""}
               <div class="field">
                 <label>借用备注</label>
                 <textarea name="note" placeholder="可填写用途或实验项目"></textarea>
               </div>
               <button class="btn primary" type="submit">确认出库</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "delete-user") {
+    const user = state.users.find((item) => item.id === modal.userId);
+    if (!user) return "";
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-user-title">
+          <div class="panel-head">
+            <h3 id="delete-user-title">注销账户</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="delete-user">
+              <p class="meta">将注销 ${escapeHtml(user.name)} 的账户。审计流水会保留历史记录。</p>
+              <div class="field">
+                <label>输入用户名确认</label>
+                <input name="confirm" required autocomplete="off" placeholder="${escapeAttr(user.username)}" />
+              </div>
+              <button class="btn danger" type="submit">确认注销</button>
             </form>
           </div>
         </section>

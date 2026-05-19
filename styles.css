@@ -271,6 +271,13 @@ button {
   max-width: 220px;
 }
 
+.inline-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
 .field textarea {
   min-height: 86px;
   resize: vertical;
