@@ -39,7 +39,7 @@ const formalTripods = [
   model: "VCT-999",
   category: "常规设备",
   status: "in_stock",
-  locationId: "loc-store",
+  locationId: "loc-research-314",
   currentHolderId: "",
   nfcTagId: "",
   purchaseDate: "",
@@ -51,7 +51,7 @@ const formalTripods = [
 
 const seed = {
   authVersion: 2,
-  catalogVersion: 2,
+  catalogVersion: 3,
   activeUserId: "",
   users: [
     { id: "u-knight", username: "Knight", password: "twd416", name: "Knight", email: "knight@lab.local", role: "superadmin", department: "中心实验室" },
@@ -59,9 +59,7 @@ const seed = {
     { id: "u-student", username: "student", password: "student123", name: "学生用户", email: "student@lab.local", role: "user", department: "课题组 A" }
   ],
   locations: [
-    { id: "loc-chem", name: "化学实验室 A-203" },
-    { id: "loc-bio", name: "生物实验室 B-115" },
-    { id: "loc-store", name: "公共库房" }
+    { id: "loc-research-314", name: "科研楼314" }
   ],
   categories: ["精密仪器", "常规设备", "工具附件"],
   equipment: [
@@ -73,7 +71,7 @@ const seed = {
       assetNo: "LAB-2026-001",
       category: "精密仪器",
       status: "in_stock",
-      locationId: "loc-bio",
+      locationId: "loc-research-314",
       currentHolderId: "",
       qrTagId: "tag-a8f2c1d4",
       nfcTagId: "",
@@ -90,7 +88,7 @@ const seed = {
       assetNo: "LAB-2026-002",
       category: "常规设备",
       status: "borrowed",
-      locationId: "loc-chem",
+      locationId: "loc-research-314",
       currentHolderId: "u-student",
       qrTagId: "tag-b6e7d920",
       nfcTagId: "nfc-b6e7d920",
@@ -107,7 +105,7 @@ const seed = {
       assetNo: "LAB-2026-003",
       category: "精密仪器",
       status: "maintenance",
-      locationId: "loc-store",
+      locationId: "loc-research-314",
       currentHolderId: "",
       qrTagId: "tag-d3c41e88",
       nfcTagId: "",
@@ -171,6 +169,10 @@ document.addEventListener("change", (event) => {
     applyFilters(form);
     return;
   }
+  if (event.target.matches("[name='imageFile']")) {
+    previewImageFile(event.target);
+    return;
+  }
   if (!target) return;
   if (target.dataset.action === "switch-user") {
     state.activeUserId = target.value;
@@ -217,6 +219,7 @@ function loadState() {
     merged.authVersion = seed.authVersion;
     if (parsed.catalogVersion !== seed.catalogVersion) {
       merged.equipment = ensureCatalogEquipment(merged.equipment || []);
+      migrateDefaultLocation(merged);
     }
     merged.catalogVersion = seed.catalogVersion;
     merged.users = ensureSeedUsers(merged.users || []);
@@ -234,6 +237,11 @@ function ensureCatalogEquipment(equipment) {
     }
   }
   return equipment;
+}
+
+function migrateDefaultLocation(data) {
+  data.locations = [{ id: "loc-research-314", name: "科研楼314" }];
+  data.equipment = (data.equipment || []).map((item) => ({ ...item, locationId: "loc-research-314" }));
 }
 
 function ensureSeedUsers(users) {
@@ -276,6 +284,10 @@ function isSuperAdmin() {
 
 function locationName(id) {
   return state.locations.find((loc) => loc.id === id)?.name || "未设置";
+}
+
+function todayDate() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function userName(id) {
@@ -713,6 +725,7 @@ function scanView() {
 
 function adminView() {
   if (!isAdminUser()) return notFoundView();
+  const defaultLocationId = state.locations[0]?.id || "loc-research-314";
   return `
     <section class="panel">
       <div class="panel-body">
@@ -727,7 +740,7 @@ function adminView() {
           </div>
           <div class="field">
             <label>资产编号</label>
-            <input name="assetNo" required placeholder="LAB-2026-004" />
+            <input name="assetNo" required value="${escapeAttr(nextAssetNo())}" />
           </div>
           <div class="field">
             <label>分类</label>
@@ -738,12 +751,12 @@ function adminView() {
           <div class="field">
             <label>放置位置</label>
             <select name="locationId" required>
-              ${state.locations.map((item) => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}
+              ${state.locations.map((item) => `<option value="${item.id}" ${item.id === defaultLocationId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
             </select>
           </div>
           <div class="field">
             <label>购置日期</label>
-            <input name="purchaseDate" type="date" />
+            <input name="purchaseDate" type="date" value="${todayDate()}" />
           </div>
           <div class="field">
             <label>价格</label>
@@ -756,6 +769,7 @@ function adminView() {
           <div class="field wide">
             <label>设备图片</label>
             <input name="imageFile" type="file" accept="image/*" capture="environment" />
+            <img id="image-preview" class="image-preview" alt="设备图片预览" hidden />
             <span class="meta">可拍照或从本地选择图片。当前 MVP 会保存在本机浏览器中。</span>
           </div>
           <div class="field wide">
@@ -841,7 +855,12 @@ function accountsView() {
         <div class="panel-head"><h3>设备分类</h3></div>
         <div class="panel-body">
           <div class="category-list">
-            ${state.categories.map((category) => `<span class="category-chip">${escapeHtml(category)}</span>`).join("")}
+            ${state.categories.map((category) => `
+              <span class="category-chip">
+                ${escapeHtml(category)}
+                <button type="button" data-action="delete-category" data-category="${escapeAttr(category)}" title="删除分类">×</button>
+              </span>
+            `).join("")}
           </div>
         </div>
       </div>
@@ -851,6 +870,30 @@ function accountsView() {
           <form class="grid" data-form="category">
             <div class="field"><label>分类名称</label><input name="category" required /></div>
             <button class="btn primary" type="submit">添加分类</button>
+          </form>
+        </div>
+      </aside>
+    </section>
+    <section class="workspace account-lower">
+      <div class="panel">
+        <div class="panel-head"><h3>放置位置</h3></div>
+        <div class="panel-body">
+          <div class="category-list">
+            ${state.locations.map((location) => `
+              <span class="category-chip location-chip">
+                ${escapeHtml(location.name)}
+                <button type="button" data-action="delete-location" data-id="${location.id}" title="删除位置">×</button>
+              </span>
+            `).join("")}
+          </div>
+        </div>
+      </div>
+      <aside class="panel">
+        <div class="panel-head"><h3>新增位置</h3></div>
+        <div class="panel-body">
+          <form class="grid" data-form="location">
+            <div class="field"><label>位置名称</label><input name="location" required /></div>
+            <button class="btn primary" type="submit">添加位置</button>
           </form>
         </div>
       </aside>
@@ -957,6 +1000,10 @@ function handleAction(action, target) {
 
   if (action === "delete-selected-equipment") return deleteSelectedEquipment();
 
+  if (action === "delete-category") return deleteCategory(target.dataset.category);
+
+  if (action === "delete-location") return deleteLocation(target.dataset.id);
+
   if (action === "start-scan") {
     startScanner();
     return;
@@ -1053,6 +1100,11 @@ async function handleSubmit(form) {
 
   if (formType === "category") {
     createCategory(data);
+    return;
+  }
+
+  if (formType === "location") {
+    createLocation(data);
   }
 }
 
@@ -1247,6 +1299,16 @@ async function createEquipment(data) {
     return;
   }
 
+  const assetNo = data.assetNo.trim();
+  if (!assetNo) {
+    toast("请输入资产编号");
+    return;
+  }
+  if (state.equipment.some((item) => item.assetNo.trim().toLowerCase() === assetNo.toLowerCase())) {
+    toast("资产编号已存在，不能重复录入");
+    return;
+  }
+
   const imageFile = data.imageFile instanceof File && data.imageFile.size > 0 ? data.imageFile : null;
   if (imageFile && imageFile.size > 2 * 1024 * 1024) {
     toast("图片不能超过 2MB");
@@ -1257,7 +1319,7 @@ async function createEquipment(data) {
     id: `eq-${crypto.randomUUID()}`,
     name: data.name.trim(),
     model: data.model.trim(),
-    assetNo: data.assetNo.trim(),
+    assetNo,
     category: data.category,
     status: "in_stock",
     locationId: data.locationId,
@@ -1352,6 +1414,89 @@ function createCategory(data) {
   saveState();
   toast("分类已添加");
   render();
+}
+
+function deleteCategory(category) {
+  if (!isAdminUser()) {
+    toast("只有管理员可以管理分类");
+    return;
+  }
+  if (state.equipment.some((item) => item.category === category)) {
+    toast("已有设备使用该分类，不能删除");
+    return;
+  }
+  state.categories = state.categories.filter((item) => item !== category);
+  saveState();
+  toast("分类已删除");
+  render();
+}
+
+function createLocation(data) {
+  if (!isAdminUser()) {
+    toast("只有管理员可以管理位置");
+    return;
+  }
+  const name = data.location.trim();
+  if (!name) return;
+  if (state.locations.some((location) => location.name === name)) {
+    toast("位置已存在");
+    return;
+  }
+  state.locations.push({ id: `loc-${crypto.randomUUID().slice(0, 8)}`, name });
+  saveState();
+  toast("位置已添加");
+  render();
+}
+
+function deleteLocation(id) {
+  if (!isAdminUser()) {
+    toast("只有管理员可以管理位置");
+    return;
+  }
+  if (state.locations.length <= 1) {
+    toast("至少保留一个放置位置");
+    return;
+  }
+  if (state.equipment.some((item) => item.locationId === id)) {
+    toast("已有设备使用该位置，不能删除");
+    return;
+  }
+  state.locations = state.locations.filter((location) => location.id !== id);
+  saveState();
+  toast("位置已删除");
+  render();
+}
+
+function nextAssetNo() {
+  let max = 0;
+  let width = 9;
+  for (const item of state.equipment) {
+    const match = /^LAB-(\d+)$/.exec(item.assetNo || "");
+    if (!match) continue;
+    const value = Number(match[1]);
+    if (Number.isFinite(value) && value > max) {
+      max = value;
+      width = match[1].length;
+    }
+  }
+  return `LAB-${String(max + 1).padStart(width, "0")}`;
+}
+
+function previewImageFile(input) {
+  const preview = document.querySelector("#image-preview");
+  const file = input.files?.[0];
+  if (!preview) return;
+  if (!file) {
+    preview.hidden = true;
+    preview.removeAttribute("src");
+    return;
+  }
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    preview.src = reader.result;
+    preview.hidden = false;
+  });
+  reader.readAsDataURL(file);
 }
 
 function changeRole(userId, role) {
