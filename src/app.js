@@ -122,6 +122,8 @@ const seed = {
 seed.events = seed.equipment.map((item) => ({
   id: crypto.randomUUID(),
   equipmentId: item.id,
+  equipmentName: item.name,
+  assetNo: item.assetNo,
   actorId: "u-admin",
   action: "seed",
   fromStatus: "",
@@ -169,6 +171,11 @@ document.addEventListener("change", (event) => {
     applyFilters(form);
     return;
   }
+  const historyForm = event.target.closest("[data-form='history-filters']");
+  if (historyForm) {
+    applyHistoryFilters(historyForm);
+    return;
+  }
   if (event.target.matches("[name='imageFile']")) {
     previewImageFile(event.target);
     return;
@@ -199,6 +206,8 @@ document.addEventListener("input", (event) => {
   if (target.matches("[data-label-select]")) updateSelectedLabelCount();
   const form = target.closest("[data-form='filters']");
   if (form) applyFilters(form, true);
+  const historyForm = target.closest("[data-form='history-filters']");
+  if (historyForm) applyHistoryFilters(historyForm, true);
 });
 
 window.addEventListener("beforeunload", stopScanner);
@@ -326,6 +335,7 @@ function render() {
   const nav = [
     ["dashboard", "总览", "/"],
     ["equipment", "设备", "/equipment"],
+    ["history", "历史", "/history"],
     ["scan", "扫码", "/scan"],
     ...(isAdminUser() ? [["labels", "标签", "/labels"]] : []),
     ...(isAdminUser() ? [["admin", "录入", "/admin"]] : []),
@@ -344,6 +354,11 @@ function render() {
     subtitle = "按名称、资产编号、分类和状态查询设备";
     actions = `${isSuperAdmin() ? `<button class="btn danger" data-action="delete-selected-equipment">删除已选</button>` : ""}${isAdminUser() ? `<button class="btn primary" data-route="/admin">新增设备</button>` : ""}`;
     page = equipmentListView();
+  } else if (path === "/history") {
+    title = "历史记录";
+    subtitle = "查询全部设备流水和审计记录";
+    actions = isSuperAdmin() ? `<button class="btn danger" data-action="delete-selected-events">删除已选</button>` : "";
+    page = historyView();
   } else if (parts[0] === "equipment" && parts[1]) {
     const equipment = findEquipment(parts[1]);
     title = equipment ? equipment.name : "设备不存在";
@@ -493,6 +508,7 @@ function navIcon(key) {
   const icons = {
     dashboard: "▦",
     equipment: "□",
+    history: "≡",
     scan: "⌕",
     admin: "+",
     labels: "▣",
@@ -640,6 +656,87 @@ function equipmentTable(items) {
           .join("")}
       </tbody>
     </table>
+  `;
+}
+
+function applyHistoryFilters(form, replace = false) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const params = new URLSearchParams();
+  if (data.q) params.set("q", data.q);
+  if (data.action) params.set("action", data.action);
+  const path = `/history${params.toString() ? `?${params.toString()}` : ""}`;
+  if (replace) {
+    history.replaceState({}, "", path);
+    updateHistoryResults(data.q || "", data.action || "");
+    return;
+  }
+  navigate(path);
+}
+
+function updateHistoryResults(q, action) {
+  const results = document.querySelector("#history-results");
+  if (!results) return;
+  results.innerHTML = historyList(filterEvents(q, action));
+}
+
+function historyView() {
+  const params = new URLSearchParams(window.location.search);
+  const q = params.get("q") || "";
+  const action = params.get("action") || "";
+  const filtered = filterEvents(q, action);
+  return `
+    <section class="panel">
+      <div class="panel-body">
+        <form class="filters history-filters" data-form="history-filters">
+          <div class="field">
+            <label>搜索</label>
+            <input name="q" value="${escapeAttr(q)}" placeholder="设备、资产编号、用户、备注" />
+          </div>
+          <div class="field">
+            <label>流水类型</label>
+            <select name="action">
+              <option value="">全部</option>
+              ${Object.entries(actionMap).map(([key, label]) => `<option value="${key}" ${action === key ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </div>
+        </form>
+        <div id="history-results">
+          ${historyList(filtered)}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function filterEvents(q, action) {
+  const keyword = q.trim().toLowerCase();
+  return [...state.events]
+    .filter((event) => {
+      const equipment = findEquipment(event.equipmentId);
+      const actor = state.users.find((user) => user.id === event.actorId);
+      const text = [
+        actionMap[event.action] || event.action,
+        equipment?.name,
+        equipment?.assetNo,
+        event.equipmentName,
+        event.assetNo,
+        actor?.name,
+        actor?.username,
+        event.note,
+        statusMap[event.fromStatus] || event.fromStatus,
+        statusMap[event.toStatus] || event.toStatus
+      ].join(" ").toLowerCase();
+      return (!keyword || text.includes(keyword)) && (!action || event.action === action);
+    })
+    .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+}
+
+function historyList(events) {
+  if (!events.length) return `<div class="empty">没有匹配记录</div>`;
+  return `
+    <div class="timeline history-list">
+      ${events.map((event) => eventRow(event, { selectable: isSuperAdmin() })).join("")}
+    </div>
   `;
 }
 
@@ -967,15 +1064,19 @@ function statusPill(status) {
   return `<span class="status ${status}">${statusMap[status] || status}</span>`;
 }
 
-function eventRow(event) {
+function eventRow(event, options = {}) {
   const equipment = findEquipment(event.equipmentId);
   const actor = state.users.find((user) => user.id === event.actorId);
+  const equipmentName = equipment?.name || event.equipmentName || "已删除设备";
   return `
-    <div class="event event-${escapeAttr(event.action)}">
-      <strong>${escapeHtml(actionMap[event.action] || event.action)} · ${escapeHtml(equipment?.name || "未知设备")}</strong>
-      <span class="meta">${formatDateTime(event.occurredAt)} · ${escapeHtml(userName(event.actorId))}${actor ? ` · <span class="role-badge ${actor.role}">${roleMap[actor.role]}</span>` : ""}</span>
-      <div class="meta">${event.fromStatus ? `${statusMap[event.fromStatus]} → ` : ""}${statusMap[event.toStatus] || event.toStatus}${event.dueAt ? ` · 应还 ${escapeHtml(event.dueAt)}` : ""}</div>
-      ${event.note ? `<div>${escapeHtml(event.note)}</div>` : ""}
+    <div class="event event-${escapeAttr(event.action)} ${options.selectable ? "selectable" : ""}">
+      ${options.selectable ? `<input type="checkbox" data-event-select value="${event.id}" aria-label="选择流水记录" />` : ""}
+      <div>
+        <strong>${escapeHtml(actionMap[event.action] || event.action)} · ${escapeHtml(equipmentName)}</strong>
+        <span class="meta">${formatDateTime(event.occurredAt)} · ${escapeHtml(userName(event.actorId))}${actor ? ` · <span class="role-badge ${actor.role}">${roleMap[actor.role]}</span>` : ""}</span>
+        <div class="meta">${event.fromStatus ? `${statusMap[event.fromStatus]} → ` : ""}${statusMap[event.toStatus] || event.toStatus}${event.dueAt ? ` · 应还 ${escapeHtml(event.dueAt)}` : ""}</div>
+        ${event.note ? `<div>${escapeHtml(event.note)}</div>` : ""}
+      </div>
     </div>
   `;
 }
@@ -1014,6 +1115,8 @@ function handleAction(action, target) {
   if (action === "delete-user") return deleteUser(target.dataset.id);
 
   if (action === "toggle-equipment-selection") return toggleEquipmentSelection(target.checked);
+
+  if (action === "delete-selected-events") return deleteSelectedEvents();
 
   if (action === "add-borrow-location") return addBorrowLocation();
 
@@ -1059,6 +1162,11 @@ async function handleSubmit(form) {
 
   if (formType === "filters") {
     applyFilters(form);
+    return;
+  }
+
+  if (formType === "history-filters") {
+    applyHistoryFilters(form);
     return;
   }
 
@@ -1276,8 +1384,13 @@ function submitDeleteEquipment(data) {
     toast("请输入 DELETE 确认删除");
     return;
   }
+  const equipmentById = new Map(state.equipment.map((item) => [item.id, item]));
+  state.events = state.events.map((event) => {
+    if (!ids.has(event.equipmentId)) return event;
+    const item = equipmentById.get(event.equipmentId);
+    return { ...event, equipmentName: event.equipmentName || item?.name, assetNo: event.assetNo || item?.assetNo };
+  });
   state.equipment = state.equipment.filter((item) => !ids.has(item.id));
-  state.events = state.events.filter((event) => !ids.has(event.equipmentId));
   saveState();
   modal = null;
   toast("设备已删除");
@@ -1288,6 +1401,24 @@ function toggleEquipmentSelection(checked) {
   document.querySelectorAll("[data-equipment-select]").forEach((input) => {
     input.checked = checked;
   });
+}
+
+function deleteSelectedEvents() {
+  if (!isSuperAdmin()) {
+    toast("只有超级管理员可以删除流水记录");
+    return;
+  }
+  const ids = [...document.querySelectorAll("[data-event-select]:checked")].map((input) => input.value);
+  if (!ids.length) {
+    toast("请先选择要删除的流水记录");
+    return;
+  }
+  if (!window.confirm(`确认删除 ${ids.length} 条流水记录？`)) return;
+  const selected = new Set(ids);
+  state.events = state.events.filter((event) => !selected.has(event.id));
+  saveState();
+  toast("流水记录已删除");
+  render();
 }
 
 function fileToDataUrl(file) {
@@ -1308,6 +1439,8 @@ function transition(item, action, toStatus, details) {
   state.events.push({
     id: crypto.randomUUID(),
     equipmentId: item.id,
+    equipmentName: item.name,
+    assetNo: item.assetNo,
     actorId: currentUser().id,
     action,
     fromStatus,
@@ -1365,6 +1498,8 @@ async function createEquipment(data) {
   state.events.push({
     id: crypto.randomUUID(),
     equipmentId: item.id,
+    equipmentName: item.name,
+    assetNo: item.assetNo,
     actorId: currentUser().id,
     action: "create",
     fromStatus: "",
@@ -1942,7 +2077,7 @@ function modalView() {
           </div>
           <div class="panel-body">
             <form class="grid" data-form="delete-equipment">
-              <p class="meta">将删除 ${items.length} 台设备及其本地审计流水。此操作仅限超级管理员。</p>
+              <p class="meta">将删除 ${items.length} 台设备。历史流水会保留，并记录设备名称快照。此操作仅限超级管理员。</p>
               <div class="delete-list">
                 ${items.map((item) => `<div><strong>${escapeHtml(item.name)}</strong><span class="meta"> ${escapeHtml(item.assetNo)}</span></div>`).join("")}
               </div>

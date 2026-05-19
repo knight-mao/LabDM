@@ -244,6 +244,10 @@ button {
   margin-bottom: 14px;
 }
 
+.history-filters {
+  grid-template-columns: minmax(220px, 1fr) 180px;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -394,6 +398,16 @@ tr.clickable:hover {
 .event {
   border-left: 3px solid var(--brand);
   padding-left: 12px;
+}
+
+.event.selectable {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.event.selectable input {
+  margin-top: 4px;
 }
 
 .event-borrow {
