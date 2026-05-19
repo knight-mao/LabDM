@@ -396,8 +396,60 @@ tr.clickable:hover {
   padding-left: 12px;
 }
 
+.event-borrow {
+  border-left-color: #d97706;
+}
+
+.event-return_request {
+  border-left-color: #7c3aed;
+}
+
+.event-return_approved,
+.event-restore {
+  border-left-color: #059669;
+}
+
+.event-return_rejected,
+.event-maintenance {
+  border-left-color: #2563eb;
+}
+
+.event-scrap {
+  border-left-color: #b91c1c;
+}
+
+.event-create,
+.event-seed {
+  border-left-color: #64748b;
+}
+
 .event strong {
   display: block;
+}
+
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.role-badge.superadmin {
+  color: #7f1d1d;
+  background: #fee2e2;
+}
+
+.role-badge.admin {
+  color: #075985;
+  background: #e0f2fe;
+}
+
+.role-badge.user {
+  color: #166534;
+  background: #dcfce7;
 }
 
 .scan-box {

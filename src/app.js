@@ -551,10 +551,16 @@ function applyFilters(form, replace = false) {
   const path = `/equipment${params.toString() ? `?${params.toString()}` : ""}`;
   if (replace) {
     history.replaceState({}, "", path);
-    render();
+    updateEquipmentResults(data.q || "", data.status || "", data.category || "");
     return;
   }
   navigate(path);
+}
+
+function updateEquipmentResults(q, status, category) {
+  const results = document.querySelector("#equipment-results");
+  if (!results) return;
+  results.innerHTML = equipmentTable(filterEquipment(q, status, category));
 }
 
 function equipmentListView() {
@@ -587,7 +593,9 @@ function equipmentListView() {
             </select>
           </div>
         </form>
-        ${equipmentTable(filtered)}
+        <div id="equipment-results">
+          ${equipmentTable(filtered)}
+        </div>
       </div>
     </section>
   `;
@@ -961,10 +969,11 @@ function statusPill(status) {
 
 function eventRow(event) {
   const equipment = findEquipment(event.equipmentId);
+  const actor = state.users.find((user) => user.id === event.actorId);
   return `
-    <div class="event">
+    <div class="event event-${escapeAttr(event.action)}">
       <strong>${escapeHtml(actionMap[event.action] || event.action)} · ${escapeHtml(equipment?.name || "未知设备")}</strong>
-      <span class="meta">${formatDateTime(event.occurredAt)} · ${escapeHtml(userName(event.actorId))}</span>
+      <span class="meta">${formatDateTime(event.occurredAt)} · ${escapeHtml(userName(event.actorId))}${actor ? ` · <span class="role-badge ${actor.role}">${roleMap[actor.role]}</span>` : ""}</span>
       <div class="meta">${event.fromStatus ? `${statusMap[event.fromStatus]} → ` : ""}${statusMap[event.toStatus] || event.toStatus}${event.dueAt ? ` · 应还 ${escapeHtml(event.dueAt)}` : ""}</div>
       ${event.note ? `<div>${escapeHtml(event.note)}</div>` : ""}
     </div>
