@@ -1,4 +1,6 @@
 const STORE_KEY = "labdm.mvp.v1";
+const SUPABASE_TABLE = "labdm_state";
+const SUPABASE_STATE_KEY = "main";
 
 const statusMap = {
   in_stock: "在库",
@@ -133,10 +135,11 @@ seed.events = seed.equipment.map((item) => ({
   note: "MVP 示例数据"
 }));
 
-let state = loadState();
+let state = structuredClone(seed);
 let scannerStream = null;
 let scannerTimer = null;
 let modal = null;
+let backend = { type: "local", client: null, ready: false, saving: false, pending: false };
 
 const app = document.querySelector("#app");
 
@@ -216,13 +219,18 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
 
-render();
+initApp();
 
-function loadState() {
+async function initApp() {
+  state = await loadState();
+  render();
+}
+
+async function loadState() {
   const raw = localStorage.getItem(STORE_KEY);
-  if (!raw) return structuredClone(seed);
+  let local = structuredClone(seed);
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = raw ? JSON.parse(raw) : {};
     const merged = { ...structuredClone(seed), ...parsed };
     if (parsed.authVersion !== seed.authVersion) merged.activeUserId = "";
     merged.authVersion = seed.authVersion;
@@ -232,10 +240,12 @@ function loadState() {
     }
     merged.catalogVersion = seed.catalogVersion;
     merged.users = ensureSeedUsers(merged.users || []);
-    return merged;
+    local = merged;
   } catch {
-    return structuredClone(seed);
+    local = structuredClone(seed);
   }
+  const remote = await loadSupabaseState(local);
+  return remote || local;
 }
 
 function ensureCatalogEquipment(equipment) {
@@ -267,6 +277,88 @@ function ensureSeedUsers(users) {
 
 function saveState() {
   localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  saveSupabaseState();
+}
+
+async function loadSupabaseState(localState) {
+  const config = window.LABDM_SUPABASE;
+  if (!config?.url || !config?.anonKey) return null;
+  try {
+    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+    backend = {
+      type: "supabase",
+      client: createClient(config.url, config.anonKey),
+      ready: true,
+      saving: false,
+      pending: false
+    };
+    const { data, error } = await backend.client
+      .from(SUPABASE_TABLE)
+      .select("data")
+      .eq("id", SUPABASE_STATE_KEY)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data?.data) {
+      await backend.client.from(SUPABASE_TABLE).upsert({
+        id: SUPABASE_STATE_KEY,
+        data: { ...localState, activeUserId: "" },
+        updated_at: new Date().toISOString()
+      });
+      return localState;
+    }
+    const remote = normalizeLoadedState(data.data);
+    remote.activeUserId = remote.users.some((user) => user.id === localState.activeUserId) ? localState.activeUserId : "";
+    localStorage.setItem(STORE_KEY, JSON.stringify(remote));
+    return remote;
+  } catch (error) {
+    console.warn("Supabase unavailable, using local storage.", error);
+    backend = { type: "local", client: null, ready: false, saving: false, pending: false };
+    return null;
+  }
+}
+
+function normalizeLoadedState(value) {
+  const parsed = value && typeof value === "object" ? value : {};
+  const merged = { ...structuredClone(seed), ...parsed };
+  merged.authVersion = seed.authVersion;
+  if (parsed.catalogVersion !== seed.catalogVersion) {
+    merged.equipment = ensureCatalogEquipment(merged.equipment || []);
+    migrateDefaultLocation(merged);
+  }
+  merged.catalogVersion = seed.catalogVersion;
+  merged.users = ensureSeedUsers(merged.users || []);
+  return merged;
+}
+
+function saveSupabaseState() {
+  if (backend.type !== "supabase" || !backend.ready) return;
+  if (backend.saving) {
+    backend.pending = true;
+    return;
+  }
+  backend.saving = true;
+  queueMicrotask(async () => {
+    try {
+      backend.pending = false;
+      await backend.client.from(SUPABASE_TABLE).upsert({
+        id: SUPABASE_STATE_KEY,
+        data: sharedStateSnapshot(),
+        updated_at: new Date().toISOString()
+      });
+    } catch (error) {
+      console.warn("Supabase save failed.", error);
+    } finally {
+      backend.saving = false;
+      if (backend.pending) saveSupabaseState();
+    }
+  });
+}
+
+function sharedStateSnapshot() {
+  return {
+    ...state,
+    activeUserId: ""
+  };
 }
 
 function nextDate(days) {

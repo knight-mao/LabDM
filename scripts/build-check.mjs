@@ -4,9 +4,11 @@ const required = [
   "index.html",
   "styles.css",
   "src/app.js",
+  "config.js",
   "manifest.webmanifest",
   "sw.js",
   "netlify.toml",
+  "supabase/schema.sql",
   "templates/实验室设备标签.wdfx"
 ];
 

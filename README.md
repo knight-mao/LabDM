@@ -1,6 +1,6 @@
 # LabDM 实验室设备管理 MVP
 
-Phase 1 版本聚焦二维码主路径和基础借还闭环。当前实现不依赖 npm 安装，直接使用原生 ES modules、浏览器 localStorage 和一个内置静态服务器，便于先验证业务流程。
+Phase 1 版本聚焦二维码主路径和基础借还闭环。当前实现不依赖 npm 安装，直接使用原生 ES modules、浏览器 localStorage、可选 Supabase 同步和一个内置静态服务器，便于先验证业务流程。
 
 ## 功能范围
 
@@ -13,6 +13,7 @@ Phase 1 版本聚焦二维码主路径和基础借还闭环。当前实现不依
 - 扫码页：支持浏览器 `BarcodeDetector` 的设备可直接扫码；其他浏览器可手动输入短码。
 - 标签打印：生成可打印标签，勾选后只打印已选二维码；二维码图片由公共二维码服务渲染，短码文本可作为降级入口。
 - PWA：包含 manifest 和 service worker，可添加到主屏幕。
+- Supabase 同步：配置后可把当前 MVP 状态同步到 Supabase，支持多端共享。
 
 ## 账户说明
 
@@ -46,9 +47,19 @@ npm run build
 
 当前 build 只做文件存在性检查，发布目录为项目根目录。
 
-## 后续接 Supabase 的建议
+## Supabase 配置
 
-当前数据存在浏览器 localStorage，适合验证流程，不适合多人生产使用。正式化时建议把 `src/app.js` 中的状态读写封装替换为 Supabase：
+当前 Supabase 接入使用单表 JSON 状态同步，优先保证现有 MVP 能多端共享。配置步骤：
+
+1. 在 Supabase SQL Editor 执行 `supabase/schema.sql`。
+2. 在 `config.js` 中填写项目 URL 和 anon publishable key。
+3. 重新打开页面。首次连接时，如果远端还没有数据，会把当前本地状态初始化到 Supabase。
+
+`config.js` 只能填写 anon key，不能填写 service_role key。
+
+## 后续 Supabase 正式化建议
+
+当前接入仍是 MVP 状态表，适合先跑通多人共享，不是最终数据库模型。正式化时建议进一步拆表：
 
 - `equipment`：设备主表。
 - `equipment_labels`：二维码/NFC 标签表。
