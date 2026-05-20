@@ -57,17 +57,6 @@ npm run build
 
 `config.js` 只能填写 anon key，不能填写 service_role key。
 
-## Netlify 定时盘点
-
-项目包含 Netlify Scheduled Function：`netlify/functions/inventory-keepalive.mts`。发布到 Netlify 后，它会每 5 天自动读取一次 Supabase 状态表，输出设备、账户、流水等计数，用于定期盘点和保持后端项目活跃。
-
-上线前需要在 Netlify Site settings -> Environment variables 设置：
-
-- `SUPABASE_URL`：Supabase 项目地址，例如 `https://xhlyewajwarlxvnrkdrh.supabase.co`
-- `SUPABASE_PUBLISHABLE_KEY`：Supabase 的 publishable/anon key
-
-定时函数只在 Netlify 已发布部署上运行，本地 `node server.mjs` 不会触发定时任务。
-
 ## 后续 Supabase 正式化建议
 
 当前接入仍是 MVP 状态表，适合先跑通多人共享，不是最终数据库模型。正式化时建议进一步拆表：
