@@ -352,7 +352,14 @@ function render() {
   } else if (path === "/equipment") {
     title = "设备台账";
     subtitle = "按名称、资产编号、分类和状态查询设备";
-    actions = `${isSuperAdmin() ? `<button class="btn danger" data-action="delete-selected-equipment">删除已选</button>` : ""}${isAdminUser() ? `<button class="btn primary" data-route="/admin">新增设备</button>` : ""}`;
+    actions = `
+      <button class="btn" data-action="batch-borrow">批量借出</button>
+      <button class="btn" data-action="batch-return">批量归还</button>
+      ${isAdminUser() ? `<button class="btn" data-action="batch-approve-return">批量确认归还</button>` : ""}
+      ${isAdminUser() ? `<button class="btn" data-action="batch-reject-return">批量驳回归还</button>` : ""}
+      ${isSuperAdmin() ? `<button class="btn danger" data-action="delete-selected-equipment">删除已选</button>` : ""}
+      ${isAdminUser() ? `<button class="btn primary" data-route="/admin">新增设备</button>` : ""}
+    `;
     page = equipmentListView();
   } else if (path === "/history") {
     title = "历史记录";
@@ -627,12 +634,12 @@ function filterEquipment(q, status, category) {
 
 function equipmentTable(items) {
   if (!items.length) return `<div class="empty">没有匹配设备</div>`;
-  const canDelete = isSuperAdmin();
+  const canSelect = isLoggedIn();
   return `
     <table>
       <thead>
         <tr>
-          ${canDelete ? `<th><input type="checkbox" data-action="toggle-equipment-selection" aria-label="全选设备" /></th>` : ""}
+          ${canSelect ? `<th><input type="checkbox" data-action="toggle-equipment-selection" aria-label="全选设备" /></th>` : ""}
           <th>设备</th>
           <th>状态</th>
           <th>位置</th>
@@ -645,7 +652,7 @@ function equipmentTable(items) {
           .map(
             (item) => `
               <tr class="clickable" data-equipment="${item.id}">
-                ${canDelete ? `<td><input type="checkbox" data-equipment-select value="${item.id}" aria-label="选择 ${escapeAttr(item.name)}" /></td>` : ""}
+                ${canSelect ? `<td><input type="checkbox" data-equipment-select value="${item.id}" aria-label="选择 ${escapeAttr(item.name)}" /></td>` : ""}
                 <td><strong>${escapeHtml(item.name)}</strong><div class="meta">${escapeHtml(item.assetNo)} · ${escapeHtml(item.model)}</div></td>
                 <td>${statusPill(item.status)}</td>
                 <td>${escapeHtml(locationName(item.locationId))}</td>
@@ -1116,6 +1123,14 @@ function handleAction(action, target) {
 
   if (action === "toggle-equipment-selection") return toggleEquipmentSelection(target.checked);
 
+  if (action === "batch-borrow") return openBatchBorrow();
+
+  if (action === "batch-return") return openBatchReturn();
+
+  if (action === "batch-approve-return") return openBatchReturnAudit("approve");
+
+  if (action === "batch-reject-return") return openBatchReturnAudit("reject");
+
   if (action === "delete-selected-events") return deleteSelectedEvents();
 
   if (action === "add-borrow-location") return addBorrowLocation();
@@ -1197,6 +1212,21 @@ async function handleSubmit(form) {
 
   if (formType === "borrow") {
     submitBorrow(data);
+    return;
+  }
+
+  if (formType === "batch-borrow") {
+    submitBatchBorrow(data);
+    return;
+  }
+
+  if (formType === "batch-return") {
+    submitBatchReturn(data);
+    return;
+  }
+
+  if (formType === "batch-return-audit") {
+    submitBatchReturnAudit(data);
     return;
   }
 
@@ -1377,6 +1407,110 @@ function deleteSelectedEquipment() {
   render();
 }
 
+function selectedEquipmentItems() {
+  const ids = [...document.querySelectorAll("[data-equipment-select]:checked")].map((input) => input.value);
+  return state.equipment.filter((item) => ids.includes(item.id));
+}
+
+function openBatchBorrow() {
+  const items = selectedEquipmentItems().filter((item) => item.status === "in_stock");
+  if (!items.length) {
+    toast("请选择在库设备进行批量借出");
+    return;
+  }
+  modal = { type: "batch-borrow", equipmentIds: items.map((item) => item.id) };
+  render();
+}
+
+function openBatchReturn() {
+  const items = selectedEquipmentItems().filter((item) => item.status === "borrowed" && (isAdminUser() || item.currentHolderId === currentUser().id));
+  if (!items.length) {
+    toast("请选择可归还的借出设备");
+    return;
+  }
+  modal = { type: "batch-return", equipmentIds: items.map((item) => item.id) };
+  render();
+}
+
+function openBatchReturnAudit(mode) {
+  if (!isAdminUser()) {
+    toast("只有管理员可以审核归还");
+    return;
+  }
+  const items = selectedEquipmentItems().filter((item) => item.status === "return_pending");
+  if (!items.length) {
+    toast("请选择待归还审核的设备");
+    return;
+  }
+  modal = { type: "batch-return-audit", mode, equipmentIds: items.map((item) => item.id) };
+  render();
+}
+
+function submitBatchBorrow(data) {
+  if (!modal || modal.type !== "batch-borrow") return;
+  const items = batchModalItems().filter((item) => item.status === "in_stock");
+  if (!items.length) return;
+  const dueAt = data.dueAt || nextDate(7);
+  const destinationId = data.destinationLocationId;
+  const note = data.note?.trim() || `${currentUser().name} 批量借用`;
+  for (const item of items) {
+    transition(item, "borrow", "borrowed", {
+      holder: currentUser().id,
+      dueAt,
+      locationId: destinationId,
+      note: `${note}；设备去向：${locationName(destinationId)}`,
+      silent: true
+    });
+  }
+  saveState();
+  modal = null;
+  toast(`已批量借出 ${items.length} 台设备`);
+  render();
+}
+
+function submitBatchReturn(data) {
+  if (!modal || modal.type !== "batch-return") return;
+  const items = batchModalItems().filter((item) => item.status === "borrowed" && (isAdminUser() || item.currentHolderId === currentUser().id));
+  if (!items.length) return;
+  const note = data.note?.trim() || "批量申请归还，等待管理员审核";
+  for (const item of items) {
+    transition(item, "return_request", "return_pending", {
+      holder: item.currentHolderId,
+      dueAt: item.dueAt,
+      note,
+      silent: true
+    });
+  }
+  saveState();
+  modal = null;
+  toast(`已提交 ${items.length} 台设备归还审核`);
+  render();
+}
+
+function submitBatchReturnAudit(data) {
+  if (!modal || modal.type !== "batch-return-audit" || !isAdminUser()) return;
+  const items = batchModalItems().filter((item) => item.status === "return_pending");
+  if (!items.length) return;
+  const approve = modal.mode === "approve";
+  const note = data.note?.trim() || (approve ? "管理员批量审核通过，设备入库" : "管理员批量驳回归还");
+  for (const item of items) {
+    transition(item, approve ? "return_approved" : "return_rejected", approve ? "in_stock" : "borrowed", {
+      holder: approve ? "" : item.currentHolderId,
+      dueAt: approve ? "" : item.dueAt,
+      note,
+      silent: true
+    });
+  }
+  saveState();
+  modal = null;
+  toast(`已${approve ? "确认" : "驳回"} ${items.length} 台设备归还`);
+  render();
+}
+
+function batchModalItems() {
+  return state.equipment.filter((item) => modal?.equipmentIds?.includes(item.id));
+}
+
 function submitDeleteEquipment(data) {
   if (!modal || modal.type !== "delete-equipment" || !isSuperAdmin()) return;
   const ids = new Set(modal.equipmentIds);
@@ -1449,9 +1583,11 @@ function transition(item, action, toStatus, details) {
     dueAt: details.dueAt,
     note: details.note
   });
-  saveState();
-  toast("状态已更新");
-  render();
+  if (!details.silent) {
+    saveState();
+    toast("状态已更新");
+    render();
+  }
 }
 
 async function createEquipment(data) {
@@ -1665,7 +1801,7 @@ function submitDeleteUser(data) {
 }
 
 function addBorrowLocation() {
-  if (!modal || modal.type !== "borrow" || !isAdminUser()) return;
+  if (!modal || !["borrow", "batch-borrow"].includes(modal.type) || !isAdminUser()) return;
   const input = document.querySelector("#borrow-new-location");
   const name = input?.value.trim();
   if (!name) {
@@ -1896,6 +2032,14 @@ function updateSelectedLabelCount() {
   el.textContent = `已选 ${count} 个`;
 }
 
+function modalEquipmentList(items) {
+  return `
+    <div class="delete-list">
+      ${items.map((item) => `<div><strong>${escapeHtml(item.name)}</strong><span class="meta"> ${escapeHtml(item.assetNo)} · ${statusMap[item.status]}</span></div>`).join("")}
+    </div>
+  `;
+}
+
 function modalView() {
   if (!modal) return "";
   if (modal.type === "reset-password") {
@@ -1960,6 +2104,99 @@ function modalView() {
                 <textarea name="note" placeholder="可填写用途或实验项目"></textarea>
               </div>
               <button class="btn primary" type="submit">确认出库</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "batch-borrow") {
+    const items = batchModalItems().filter((item) => item.status === "in_stock");
+    const selectedDestination = modal.destinationLocationId || state.locations[0]?.id || "";
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="batch-borrow-title">
+          <div class="panel-head">
+            <h3 id="batch-borrow-title">批量借出</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="batch-borrow">
+              <p class="meta">将批量借出 ${items.length} 台在库设备，借用人为 ${escapeHtml(currentUser().name)}。</p>
+              ${modalEquipmentList(items)}
+              <div class="field">
+                <label>预计归还日期</label>
+                <input name="dueAt" type="date" value="${nextDate(7)}" required />
+              </div>
+              <div class="field">
+                <label>设备去向</label>
+                <select name="destinationLocationId" required>
+                  ${state.locations.map((location) => `<option value="${location.id}" ${location.id === selectedDestination ? "selected" : ""}>${escapeHtml(location.name)}</option>`).join("")}
+                </select>
+              </div>
+              ${isAdminUser() ? `
+                <div class="field">
+                  <label>新增放置位置</label>
+                  <div class="inline-action">
+                    <input id="borrow-new-location" placeholder="例如 科研楼315" />
+                    <button class="btn" type="button" data-action="add-borrow-location">添加</button>
+                  </div>
+                </div>
+              ` : ""}
+              <div class="field">
+                <label>借用备注</label>
+                <textarea name="note" placeholder="可填写用途或实验项目"></textarea>
+              </div>
+              <button class="btn primary" type="submit">确认批量出库</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "batch-return") {
+    const items = batchModalItems().filter((item) => item.status === "borrowed" && (isAdminUser() || item.currentHolderId === currentUser().id));
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="batch-return-title">
+          <div class="panel-head">
+            <h3 id="batch-return-title">批量申请归还</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="batch-return">
+              <p class="meta">将 ${items.length} 台借出设备提交归还审核。</p>
+              ${modalEquipmentList(items)}
+              <div class="field">
+                <label>归还备注</label>
+                <textarea name="note" placeholder="可填写设备状态、附件是否齐全、放置位置"></textarea>
+              </div>
+              <button class="btn primary" type="submit">提交归还审核</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "batch-return-audit") {
+    const items = batchModalItems().filter((item) => item.status === "return_pending");
+    const approve = modal.mode === "approve";
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="batch-audit-title">
+          <div class="panel-head">
+            <h3 id="batch-audit-title">${approve ? "批量确认归还" : "批量驳回归还"}</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="batch-return-audit">
+              <p class="meta">将${approve ? "确认入库" : "驳回"} ${items.length} 台待审核设备。</p>
+              ${modalEquipmentList(items)}
+              <div class="field">
+                <label>审核备注</label>
+                <textarea name="note" placeholder="${approve ? "例如 管理员审核通过，设备入库" : "例如 未找到设备或设备状态异常"}"></textarea>
+              </div>
+              <button class="btn ${approve ? "primary" : "danger"}" type="submit">${approve ? "确认归还入库" : "确认驳回"}</button>
             </form>
           </div>
         </section>
