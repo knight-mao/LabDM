@@ -541,6 +541,7 @@ function render() {
           </div>
           <div class="toolbar">
             ${isLoggedIn() ? `<span class="user-badge">${escapeHtml(currentUser().name)} · ${roleMap[currentUser().role]}</span>` : ""}
+            ${isLoggedIn() ? `<button class="btn ghost" data-action="edit-profile">个人资料</button>` : ""}
             ${isLoggedIn() ? `<button class="btn ghost" data-action="change-password">修改密码</button>` : ""}
             ${isLoggedIn() ? `<button class="btn ghost" data-action="logout">退出</button>` : `<button class="btn primary" data-route="/login?next=${encodeURIComponent(path)}">登录</button>`}
             ${actions}
@@ -1263,6 +1264,8 @@ function handleAction(action, target) {
 
   if (action === "change-role") return changeRole(target.dataset.id, target.value);
 
+  if (action === "edit-profile") return editProfile();
+
   if (action === "reset-password") return resetPassword(target.dataset.id);
 
   if (action === "change-password") return changePassword();
@@ -1356,6 +1359,11 @@ async function handleSubmit(form) {
 
   if (formType === "reset-password") {
     submitResetPassword(data);
+    return;
+  }
+
+  if (formType === "profile") {
+    submitProfile(data);
     return;
   }
 
@@ -2065,6 +2073,35 @@ function contactOwner(equipmentId) {
   render();
 }
 
+function editProfile() {
+  modal = { type: "profile" };
+  render();
+}
+
+function submitProfile(data) {
+  if (!modal || modal.type !== "profile") return;
+  const user = currentUser();
+  if (!user) return;
+  const username = data.username.trim();
+  if (!username || !data.name.trim()) {
+    toast("用户名和姓名不能为空");
+    return;
+  }
+  if (state.users.some((item) => item.id !== user.id && item.username === username)) {
+    toast("用户名已存在");
+    return;
+  }
+  user.username = username;
+  user.name = data.name.trim();
+  user.email = data.email.trim();
+  user.phone = data.phone.trim();
+  user.department = data.department.trim();
+  saveState();
+  modal = null;
+  render();
+  toast("个人资料已更新");
+}
+
 function changePassword() {
   modal = { type: "change-password" };
   render();
@@ -2252,6 +2289,45 @@ function modalEquipmentList(items) {
 
 function modalView() {
   if (!modal) return "";
+  if (modal.type === "profile") {
+    const user = currentUser();
+    if (!user) return "";
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="profile-title">
+          <div class="panel-head">
+            <h3 id="profile-title">个人资料</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="profile">
+              <div class="field">
+                <label>账户名</label>
+                <input name="username" value="${escapeAttr(user.username)}" required autofocus />
+              </div>
+              <div class="field">
+                <label>姓名</label>
+                <input name="name" value="${escapeAttr(user.name)}" required />
+              </div>
+              <div class="field">
+                <label>邮箱</label>
+                <input name="email" type="email" value="${escapeAttr(user.email || "")}" />
+              </div>
+              <div class="field">
+                <label>联系电话</label>
+                <input name="phone" type="tel" value="${escapeAttr(user.phone || "")}" />
+              </div>
+              <div class="field">
+                <label>部门/课题组</label>
+                <input name="department" value="${escapeAttr(user.department || "")}" />
+              </div>
+              <button class="btn primary" type="submit">保存资料</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
   if (modal.type === "contact-owner") {
     return `
       <div class="modal-backdrop" role="presentation">
