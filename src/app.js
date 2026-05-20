@@ -335,6 +335,7 @@ function render() {
   const nav = [
     ["dashboard", "总览", "/"],
     ["equipment", "设备", "/equipment"],
+    ["mine", "我的设备", "/my-equipment"],
     ["history", "历史", "/history"],
     ["scan", "扫码", "/scan"],
     ...(isAdminUser() ? [["labels", "标签", "/labels"]] : []),
@@ -361,6 +362,11 @@ function render() {
       ${isAdminUser() ? `<button class="btn primary" data-route="/admin">新增设备</button>` : ""}
     `;
     page = equipmentListView();
+  } else if (path === "/my-equipment") {
+    title = "我的设备";
+    subtitle = "管理当前由我借用或等待归还审核的设备";
+    actions = `<button class="btn" data-action="batch-return">批量归还</button>`;
+    page = myEquipmentView();
   } else if (path === "/history") {
     title = "历史记录";
     subtitle = "查询全部设备流水和审计记录";
@@ -515,6 +521,7 @@ function navIcon(key) {
   const icons = {
     dashboard: "▦",
     equipment: "□",
+    mine: "◉",
     history: "≡",
     scan: "⌕",
     admin: "+",
@@ -571,19 +578,20 @@ function applyFilters(form, replace = false) {
   if (data.q) params.set("q", data.q);
   if (data.status) params.set("status", data.status);
   if (data.category) params.set("category", data.category);
+  if (data.mine) params.set("mine", "1");
   const path = `/equipment${params.toString() ? `?${params.toString()}` : ""}`;
   if (replace) {
     history.replaceState({}, "", path);
-    updateEquipmentResults(data.q || "", data.status || "", data.category || "");
+    updateEquipmentResults(data.q || "", data.status || "", data.category || "", Boolean(data.mine));
     return;
   }
   navigate(path);
 }
 
-function updateEquipmentResults(q, status, category) {
+function updateEquipmentResults(q, status, category, mine = false) {
   const results = document.querySelector("#equipment-results");
   if (!results) return;
-  results.innerHTML = equipmentTable(filterEquipment(q, status, category));
+  results.innerHTML = equipmentTable(filterEquipment(q, status, category, mine));
 }
 
 function equipmentListView() {
@@ -591,7 +599,8 @@ function equipmentListView() {
   const q = params.get("q") || "";
   const status = params.get("status") || "";
   const category = params.get("category") || "";
-  const filtered = filterEquipment(q, status, category);
+  const mine = params.get("mine") === "1";
+  const filtered = filterEquipment(q, status, category, mine);
 
   return `
     <section class="panel">
@@ -615,6 +624,10 @@ function equipmentListView() {
               ${state.categories.map((item) => `<option value="${escapeAttr(item)}" ${category === item ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}
             </select>
           </div>
+          <label class="filter-toggle">
+            <input name="mine" type="checkbox" value="1" ${mine ? "checked" : ""} />
+            <span>和我相关</span>
+          </label>
         </form>
         <div id="equipment-results">
           ${equipmentTable(filtered)}
@@ -624,12 +637,32 @@ function equipmentListView() {
   `;
 }
 
-function filterEquipment(q, status, category) {
+function filterEquipment(q, status, category, mine = false) {
   const keyword = q.trim().toLowerCase();
   return state.equipment.filter((item) => {
     const text = [item.name, item.model, item.assetNo, item.qrTagId, item.nfcTagId].join(" ").toLowerCase();
-    return (!keyword || text.includes(keyword)) && (!status || item.status === status) && (!category || item.category === category);
+    return (
+      (!keyword || text.includes(keyword)) &&
+      (!status || item.status === status) &&
+      (!category || item.category === category) &&
+      (!mine || isMyOpenEquipment(item))
+    );
   });
+}
+
+function myEquipmentView() {
+  const items = state.equipment.filter(isMyOpenEquipment);
+  return `
+    <section class="panel">
+      <div class="panel-body">
+        ${equipmentTable(items)}
+      </div>
+    </section>
+  `;
+}
+
+function isMyOpenEquipment(item) {
+  return item.currentHolderId === currentUser()?.id && ["borrowed", "return_pending"].includes(item.status);
 }
 
 function equipmentTable(items) {
@@ -639,7 +672,7 @@ function equipmentTable(items) {
     <table>
       <thead>
         <tr>
-          ${canSelect ? `<th><input type="checkbox" data-action="toggle-equipment-selection" aria-label="全选设备" /></th>` : ""}
+          ${canSelect ? `<th class="select-col"><input class="big-check" type="checkbox" data-action="toggle-equipment-selection" aria-label="全选设备" /></th>` : ""}
           <th>设备</th>
           <th>状态</th>
           <th>位置</th>
@@ -652,7 +685,7 @@ function equipmentTable(items) {
           .map(
             (item) => `
               <tr class="clickable" data-equipment="${item.id}">
-                ${canSelect ? `<td><input type="checkbox" data-equipment-select value="${item.id}" aria-label="选择 ${escapeAttr(item.name)}" /></td>` : ""}
+                ${canSelect ? `<td class="select-col"><label class="select-hitbox" aria-label="选择 ${escapeAttr(item.name)}"><input class="big-check" type="checkbox" data-equipment-select value="${item.id}" /></label></td>` : ""}
                 <td><strong>${escapeHtml(item.name)}</strong><div class="meta">${escapeHtml(item.assetNo)} · ${escapeHtml(item.model)}</div></td>
                 <td>${statusPill(item.status)}</td>
                 <td>${escapeHtml(locationName(item.locationId))}</td>

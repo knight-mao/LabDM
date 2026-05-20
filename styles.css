@@ -239,8 +239,9 @@ button {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 160px 160px;
+  grid-template-columns: minmax(220px, 1fr) 160px 160px auto;
   gap: 10px;
+  align-items: end;
   margin-bottom: 14px;
 }
 
@@ -251,6 +252,29 @@ button {
 .field {
   display: grid;
   gap: 6px;
+}
+
+.filter-toggle {
+  min-height: 39px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+}
+
+.filter-toggle input,
+.big-check {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--brand);
 }
 
 .field label {
@@ -298,6 +322,24 @@ td {
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
+}
+
+.select-col {
+  width: 52px;
+  text-align: center;
+}
+
+.select-hitbox {
+  width: 40px;
+  height: 40px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.select-hitbox:hover {
+  background: #e6f3f3;
 }
 
 th {
