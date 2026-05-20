@@ -2,6 +2,12 @@
 command = "npm run build"
 publish = "."
 
+[functions]
+directory = "netlify/functions"
+
+[functions."inventory-keepalive"]
+schedule = "0 3 */5 * *"
+
 [[redirects]]
 from = "/*"
 to = "/index.html"

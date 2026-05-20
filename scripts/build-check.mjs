@@ -8,6 +8,7 @@ const required = [
   "manifest.webmanifest",
   "sw.js",
   "netlify.toml",
+  "netlify/functions/inventory-keepalive.mts",
   "supabase/schema.sql",
   "templates/实验室设备标签.wdfx"
 ];

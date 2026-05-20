@@ -541,6 +541,7 @@ function render() {
           </div>
           <div class="toolbar">
             ${isLoggedIn() ? `<span class="user-badge">${escapeHtml(currentUser().name)} · ${roleMap[currentUser().role]}</span>` : ""}
+            ${isLoggedIn() ? `<button class="btn ghost" data-action="change-password">修改密码</button>` : ""}
             ${isLoggedIn() ? `<button class="btn ghost" data-action="logout">退出</button>` : `<button class="btn primary" data-route="/login?next=${encodeURIComponent(path)}">登录</button>`}
             ${actions}
           </div>
@@ -1186,6 +1187,7 @@ function accountsTable() {
                 ` : escapeHtml(user.phone || "未设置")}
               </td>
               <td>
+                ${user.id === currentUser().id ? `<button class="btn" data-action="change-password">修改密码</button>` : ""}
                 ${canManage ? `<button class="btn" data-action="reset-password" data-id="${user.id}">重置密码</button>` : ""}
                 ${canDelete ? `<button class="btn danger" data-action="delete-user" data-id="${user.id}">注销账户</button>` : ""}
               </td>
@@ -1262,6 +1264,8 @@ function handleAction(action, target) {
   if (action === "change-role") return changeRole(target.dataset.id, target.value);
 
   if (action === "reset-password") return resetPassword(target.dataset.id);
+
+  if (action === "change-password") return changePassword();
 
   if (action === "delete-user") return deleteUser(target.dataset.id);
 
@@ -1352,6 +1356,11 @@ async function handleSubmit(form) {
 
   if (formType === "reset-password") {
     submitResetPassword(data);
+    return;
+  }
+
+  if (formType === "change-password") {
+    submitChangePassword(data);
     return;
   }
 
@@ -2056,6 +2065,11 @@ function contactOwner(equipmentId) {
   render();
 }
 
+function changePassword() {
+  modal = { type: "change-password" };
+  render();
+}
+
 function resetPassword(userId) {
   const user = state.users.find((item) => item.id === userId);
   if (!user || user.id === currentUser().id) return;
@@ -2080,6 +2094,25 @@ function submitResetPassword(data) {
   modal = null;
   render();
   toast("密码已重置");
+}
+
+function submitChangePassword(data) {
+  if (!modal || modal.type !== "change-password") return;
+  const user = currentUser();
+  if (!user) return;
+  if (user.password !== data.currentPassword) {
+    toast("当前密码不正确");
+    return;
+  }
+  if (!data.password || data.password !== data.confirmPassword) {
+    toast("两次输入的新密码不一致");
+    return;
+  }
+  user.password = data.password;
+  saveState();
+  modal = null;
+  render();
+  toast("密码已修改");
 }
 
 function printSelectedLabels() {
@@ -2232,6 +2265,35 @@ function modalView() {
               <dt>姓名</dt><dd>${escapeHtml(modal.name)}</dd>
               <dt>联系电话</dt><dd>${escapeHtml(modal.phone)}</dd>
             </dl>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "change-password") {
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="change-password-title">
+          <div class="panel-head">
+            <h3 id="change-password-title">修改密码</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body">
+            <form class="grid" data-form="change-password">
+              <div class="field">
+                <label>当前密码</label>
+                <input name="currentPassword" type="password" autocomplete="current-password" required autofocus />
+              </div>
+              <div class="field">
+                <label>新密码</label>
+                <input name="password" type="password" autocomplete="new-password" required />
+              </div>
+              <div class="field">
+                <label>确认新密码</label>
+                <input name="confirmPassword" type="password" autocomplete="new-password" required />
+              </div>
+              <button class="btn primary" type="submit">保存新密码</button>
+            </form>
           </div>
         </section>
       </div>
