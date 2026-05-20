@@ -52,13 +52,13 @@ const formalTripods = [
 }));
 
 const seed = {
-  authVersion: 2,
+  authVersion: 3,
   catalogVersion: 3,
   activeUserId: "",
   users: [
-    { id: "u-knight", username: "Knight", password: "twd416", name: "Knight", email: "knight@lab.local", role: "superadmin", department: "中心实验室" },
-    { id: "u-admin", username: "admin", password: "admin123", name: "管理员", email: "admin@lab.local", role: "admin", department: "中心实验室" },
-    { id: "u-student", username: "student", password: "student123", name: "学生用户", email: "student@lab.local", role: "user", department: "课题组 A" }
+    { id: "u-knight", username: "Knight", password: "twd416", name: "Knight", email: "knight@lab.local", phone: "13401158276", role: "superadmin", department: "中心实验室" },
+    { id: "u-admin", username: "admin", password: "admin123", name: "管理员", email: "admin@lab.local", phone: "", role: "admin", department: "中心实验室" },
+    { id: "u-student", username: "student", password: "student123", name: "学生用户", email: "student@lab.local", phone: "", role: "user", department: "课题组 A" }
   ],
   locations: [
     { id: "loc-research-314", name: "科研楼314" }
@@ -195,6 +195,9 @@ document.addEventListener("change", (event) => {
   if (target.dataset.action === "change-department") {
     changeDepartment(target.dataset.id, target.value);
   }
+  if (target.dataset.action === "change-phone") {
+    changePhone(target.dataset.id, target.value);
+  }
 });
 
 document.addEventListener("submit", async (event) => {
@@ -271,6 +274,7 @@ function ensureSeedUsers(users) {
   return users.map((user) => ({
     username: user.username || user.name,
     password: user.password || "123456",
+    phone: user.phone || "",
     ...user
   }));
 }
@@ -394,6 +398,10 @@ function todayDate() {
 function userName(id) {
   if (!id) return "无";
   return state.users.find((user) => user.id === id)?.name || "未知用户";
+}
+
+function superAdminUser() {
+  return state.users.find((user) => user.role === "superadmin") || state.users.find((user) => user.username === "Knight") || null;
 }
 
 function navigate(path) {
@@ -579,11 +587,15 @@ function loginView() {
             <input name="email" type="email" />
           </div>
           <div class="field">
+            <label>联系电话</label>
+            <input name="phone" type="tel" />
+          </div>
+          <div class="field">
             <label>部门/课题组</label>
             <input name="department" />
           </div>
           <button class="btn primary" type="submit">注册学生账户</button>
-          <button class="btn ghost" type="button" data-route="/">返回登录</button>
+          <button class="btn ghost" type="button" data-route="/login${window.location.search}">返回登录</button>
         </form>`
             : `
         <form class="grid" data-form="login">
@@ -596,7 +608,7 @@ function loginView() {
             <input name="password" type="password" autocomplete="current-password" required />
           </div>
           <button class="btn primary" type="submit">登录</button>
-          <button class="btn ghost" type="button" data-route="/register">学生自助注册</button>
+          <button class="btn ghost" type="button" data-route="/register${window.location.search}">学生自助注册</button>
         </form>`
         }
       </section>
@@ -877,7 +889,7 @@ function detailView(item) {
     .filter((event) => event.equipmentId === item.id)
     .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
   const canBorrow = item.status === "in_stock";
-  const canReturn = item.status === "borrowed" && (isAdminUser() || item.currentHolderId === currentUser().id);
+  const canReturn = isLoggedIn() && item.status === "borrowed" && (isAdminUser() || item.currentHolderId === currentUser().id);
   const canAuditReturn = item.status === "return_pending" && isAdminUser();
   const isAdmin = isAdminUser();
   const canRestoreScrapped = isAdmin && item.status === "scrapped";
@@ -907,6 +919,7 @@ function detailView(item) {
           </dl>
           <div class="toolbar">
             ${canBorrow ? `<button class="btn primary" data-action="borrow" data-id="${item.id}">申请借用</button>` : ""}
+            ${!isLoggedIn() ? `<button class="btn" data-action="contact-owner" data-id="${item.id}">联系设备负责人</button>` : ""}
             ${canReturn ? `<button class="btn primary" data-action="return" data-id="${item.id}">确认归还</button>` : ""}
             ${canAuditReturn ? `<button class="btn primary" data-action="approve-return" data-id="${item.id}">审核入库</button>` : ""}
             ${canAuditReturn ? `<button class="btn" data-action="reject-return" data-id="${item.id}">未归还</button>` : ""}
@@ -1074,6 +1087,7 @@ function accountsView() {
             <div class="field"><label>姓名</label><input name="name" required /></div>
             <div class="field"><label>密码</label><input name="password" required type="password" /></div>
             <div class="field"><label>邮箱</label><input name="email" type="email" /></div>
+            <div class="field"><label>联系电话</label><input name="phone" type="tel" /></div>
             <div class="field"><label>部门/课题组</label><input name="department" /></div>
             <div class="field">
               <label>角色</label>
@@ -1141,7 +1155,7 @@ function accountsView() {
 function accountsTable() {
   return `
     <table>
-      <thead><tr><th>用户</th><th>角色</th><th>部门</th><th>操作</th></tr></thead>
+      <thead><tr><th>用户</th><th>角色</th><th>部门</th><th>联系电话</th><th>操作</th></tr></thead>
       <tbody>
         ${state.users.map((user) => {
           const canEditRole = isSuperAdmin() && user.id !== currentUser().id;
@@ -1165,6 +1179,11 @@ function accountsTable() {
                 ${canManage || user.id === currentUser().id ? `
                   <input class="inline-input" data-action="change-department" data-id="${user.id}" value="${escapeAttr(user.department || "")}" placeholder="未设置" />
                 ` : escapeHtml(user.department || "未设置")}
+              </td>
+              <td>
+                ${canManage || user.id === currentUser().id ? `
+                  <input class="inline-input" data-action="change-phone" data-id="${user.id}" value="${escapeAttr(user.phone || "")}" placeholder="未设置" />
+                ` : escapeHtml(user.phone || "未设置")}
               </td>
               <td>
                 ${canManage ? `<button class="btn" data-action="reset-password" data-id="${user.id}">重置密码</button>` : ""}
@@ -1266,6 +1285,8 @@ function handleAction(action, target) {
 
   if (action === "delete-location") return deleteLocation(target.dataset.id);
 
+  if (action === "contact-owner") return contactOwner(target.dataset.id);
+
   if (action === "start-scan") {
     startScanner();
     return;
@@ -1282,6 +1303,10 @@ function handleAction(action, target) {
   if (!item) return;
 
   if (!isLoggedIn()) {
+    if (action === "borrow") {
+      navigate(`/register?next=${encodeURIComponent(window.location.pathname)}`);
+      return;
+    }
     navigate(`/login?next=${encodeURIComponent(window.location.pathname)}`);
     return;
   }
@@ -1794,6 +1819,7 @@ function createAccount(data) {
     password: data.password,
     name: data.name.trim(),
     email: data.email.trim(),
+    phone: data.phone?.trim() || "",
     role: data.role,
     department: data.department.trim()
   });
@@ -1814,13 +1840,15 @@ function selfRegister(data) {
     password: data.password,
     name: data.name.trim(),
     email: data.email.trim(),
+    phone: data.phone?.trim() || "",
     role: "user",
     department: data.department.trim()
   };
   state.users.push(user);
   state.activeUserId = user.id;
   saveState();
-  navigate("/");
+  const next = new URLSearchParams(window.location.search).get("next");
+  navigate(next || "/");
 }
 
 function createCategory(data) {
@@ -2004,6 +2032,30 @@ function changeDepartment(userId, department) {
   saveState();
 }
 
+function changePhone(userId, phone) {
+  const user = state.users.find((item) => item.id === userId);
+  if (!user) return;
+  const canManage = user.id === currentUser().id || isSuperAdmin() || (isAdminUser() && user.role === "user");
+  if (!canManage) {
+    toast("没有权限修改该用户电话");
+    render();
+    return;
+  }
+  user.phone = phone.trim();
+  saveState();
+}
+
+function contactOwner(equipmentId) {
+  const item = findEquipment(equipmentId);
+  if (!item) return;
+  const owner = item.currentHolderId ? state.users.find((user) => user.id === item.currentHolderId) : superAdminUser();
+  const title = item.currentHolderId ? "当前设备借用人" : "设备负责人";
+  const name = owner?.name || "未设置";
+  const phone = owner?.phone || "未设置联系电话";
+  modal = { type: "contact-owner", title, name, phone };
+  render();
+}
+
 function resetPassword(userId) {
   const user = state.users.find((item) => item.id === userId);
   if (!user || user.id === currentUser().id) return;
@@ -2167,6 +2219,24 @@ function modalEquipmentList(items) {
 
 function modalView() {
   if (!modal) return "";
+  if (modal.type === "contact-owner") {
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="contact-title">
+          <div class="panel-head">
+            <h3 id="contact-title">${escapeHtml(modal.title)}</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body grid">
+            <dl class="kv">
+              <dt>姓名</dt><dd>${escapeHtml(modal.name)}</dd>
+              <dt>联系电话</dt><dd>${escapeHtml(modal.phone)}</dd>
+            </dl>
+          </div>
+        </section>
+      </div>
+    `;
+  }
   if (modal.type === "reset-password") {
     const user = state.users.find((item) => item.id === modal.userId);
     if (!user) return "";
