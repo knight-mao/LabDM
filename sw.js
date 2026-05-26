@@ -1,4 +1,4 @@
-const CACHE_NAME = "labdm-v3";
+const CACHE_NAME = "labdm-v5";
 const ASSETS = [
   "/manifest.webmanifest",
   "/icons/icon.svg"

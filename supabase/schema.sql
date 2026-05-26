@@ -18,10 +18,10 @@ using (true);
 create policy "labdm_state_insert"
 on public.labdm_state
 for insert
-with check (true);
+with check (auth.role() = 'authenticated');
 
 create policy "labdm_state_update"
 on public.labdm_state
 for update
-using (true)
-with check (true);
+using (auth.role() = 'authenticated')
+with check (auth.role() = 'authenticated');

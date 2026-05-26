@@ -1,6 +1,9 @@
 const STORE_KEY = "labdm.mvp.v1";
 const SUPABASE_TABLE = "labdm_state";
 const SUPABASE_STATE_KEY = "main";
+const PASSWORD_VERSION = 1;
+const KNIGHT_EMAIL = "a.bit.bright@gmail.com";
+const SUPABASE_AUTH_USERS_URL = "https://supabase.com/dashboard/project/xhlyewajwarlxvnrkdrh/auth/users";
 
 const statusMap = {
   in_stock: "在库",
@@ -52,13 +55,15 @@ const formalTripods = [
 }));
 
 const seed = {
+  passwordVersion: 0,
   authVersion: 3,
   catalogVersion: 3,
   activeUserId: "",
+  revokedAuthUsers: [],
   users: [
-    { id: "u-knight", username: "Knight", password: "twd416", name: "Knight", email: "knight@lab.local", phone: "13401158276", role: "superadmin", department: "中心实验室" },
-    { id: "u-admin", username: "admin", password: "admin123", name: "管理员", email: "admin@lab.local", phone: "", role: "admin", department: "中心实验室" },
-    { id: "u-student", username: "student", password: "student123", name: "学生用户", email: "student@lab.local", phone: "", role: "user", department: "课题组 A" }
+    { id: "u-knight", username: "Knight", password: "twd416", visiblePassword: "twd416", name: "Knight", email: KNIGHT_EMAIL, phone: "13401158276", role: "superadmin", department: "中心实验室" },
+    { id: "u-admin", username: "admin", password: "admin123", visiblePassword: "admin123", name: "管理员", email: "admin@lab.local", phone: "", role: "admin", department: "中心实验室" },
+    { id: "u-student", username: "student", password: "student123", visiblePassword: "student123", name: "学生用户", email: "student@lab.local", phone: "", role: "user", department: "课题组 A" }
   ],
   locations: [
     { id: "loc-research-314", name: "科研楼314" }
@@ -140,8 +145,115 @@ let scannerStream = null;
 let scannerTimer = null;
 let modal = null;
 let backend = { type: "local", client: null, ready: false, saving: false, pending: false };
+let authUser = null;
 
 const app = document.querySelector("#app");
+
+async function ensureSupabaseClient() {
+  const config = window.LABDM_SUPABASE;
+  if (!config?.url || !config?.anonKey) return null;
+  if (backend.client) return backend.client;
+  const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+  backend = {
+    type: "supabase",
+    client: createClient(config.url, config.anonKey),
+    ready: true,
+    saving: false,
+    pending: false
+  };
+  return backend.client;
+}
+
+function isPasswordHash(value) {
+  return /^[a-f0-9]{64}$/.test(String(value || ""));
+}
+
+async function hashPassword(password) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(String(password || ""));
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function migratePasswords(data) {
+  const users = data?.users || [];
+  const needsMigration = (data.passwordVersion || 0) < PASSWORD_VERSION
+    || users.some((user) => user.password && !isPasswordHash(user.password));
+  if (!needsMigration) return false;
+  for (const user of users) {
+    if (user.password && !isPasswordHash(user.password)) {
+      user.visiblePassword = user.visiblePassword || user.password;
+      user.password = await hashPassword(user.password);
+    }
+  }
+  data.passwordVersion = PASSWORD_VERSION;
+  return true;
+}
+
+function stripLegacyPasswords(data) {
+  for (const user of data?.users || []) {
+    delete user.password;
+  }
+  data.passwordVersion = PASSWORD_VERSION;
+  return data;
+}
+
+function authEmailForLogin(identifier) {
+  const value = identifier.trim();
+  if (value.includes("@")) return value;
+  const profile = state.users.find((user) => user.username === value);
+  if (profile?.email) return profile.email;
+  if (value === "Knight") return KNIGHT_EMAIL;
+  return value;
+}
+
+function profileFromAuthUser(user) {
+  if (!user) return null;
+  return state.users.find((item) => item.authId === user.id)
+    || state.users.find((item) => item.email && item.email.toLowerCase() === user.email?.toLowerCase())
+    || state.users.find((item) => item.username === user.user_metadata?.username)
+    || null;
+}
+
+function isRevokedAuthUser(user) {
+  if (!user) return false;
+  const email = user.email?.toLowerCase();
+  return (state.revokedAuthUsers || []).some((item) =>
+    item.authId === user.id
+    || (email && item.email?.toLowerCase() === email)
+    || item.username === user.user_metadata?.username
+  );
+}
+
+function ensureProfileForAuthUser(user, defaults = {}) {
+  if (!user) return null;
+  if (isRevokedAuthUser(user)) return null;
+  let profile = profileFromAuthUser(user);
+  if (!profile) {
+    profile = {
+      id: `u-${crypto.randomUUID()}`,
+      authId: user.id,
+      username: defaults.username || user.user_metadata?.username || user.email?.split("@")[0] || `user-${user.id.slice(0, 8)}`,
+      name: defaults.name || user.user_metadata?.name || defaults.username || user.email || "新用户",
+      email: user.email || defaults.email || "",
+      phone: defaults.phone || user.user_metadata?.phone || "",
+      visiblePassword: defaults.visiblePassword || "",
+      role: defaults.role || "user",
+      department: defaults.department || user.user_metadata?.department || ""
+    };
+    state.users.push(profile);
+    return profile;
+  }
+  profile.authId = user.id;
+  profile.username = defaults.username || profile.username || user.user_metadata?.username || user.email?.split("@")[0] || profile.name;
+  profile.name = defaults.name || profile.name || user.user_metadata?.name || profile.username;
+  profile.email = user.email || defaults.email || profile.email || "";
+  profile.phone = defaults.phone ?? profile.phone ?? user.user_metadata?.phone ?? "";
+  profile.department = defaults.department ?? profile.department ?? user.user_metadata?.department ?? "";
+  if (defaults.visiblePassword) profile.visiblePassword = defaults.visiblePassword;
+  delete profile.password;
+  return profile;
+}
 
 window.addEventListener("popstate", render);
 window.addEventListener("hashchange", render);
@@ -226,7 +338,58 @@ initApp();
 
 async function initApp() {
   state = await loadState();
+  await syncAuthSession();
+  bindAuthListener();
   render();
+}
+
+async function syncAuthSession() {
+  const client = await ensureSupabaseClient();
+  if (!client) return;
+  const { data } = await client.auth.getSession();
+  authUser = data.session?.user || null;
+  if (!authUser) {
+    state.activeUserId = "";
+    return;
+  }
+  if (isRevokedAuthUser(authUser)) {
+    await client.auth.signOut();
+    authUser = null;
+    state.activeUserId = "";
+    saveState();
+    return;
+  }
+  const profile = ensureProfileForAuthUser(authUser);
+  state.activeUserId = profile?.id || "";
+  stripLegacyPasswords(state);
+  saveState();
+}
+
+function bindAuthListener() {
+  if (!backend.client || backend.authListenerBound) return;
+  backend.authListenerBound = true;
+  backend.client.auth.onAuthStateChange((_event, session) => {
+    authUser = session?.user || null;
+    if (!authUser) {
+      state.activeUserId = "";
+      saveState();
+      render();
+      return;
+    }
+    if (isRevokedAuthUser(authUser)) {
+      backend.client.auth.signOut();
+      authUser = null;
+      state.activeUserId = "";
+      saveState();
+      render();
+      return;
+    }
+    const profile = ensureProfileForAuthUser(authUser);
+    state.activeUserId = profile?.id || "";
+    stripLegacyPasswords(state);
+    saveState();
+    render();
+  });
 }
 
 async function loadState() {
@@ -242,11 +405,14 @@ async function loadState() {
       migrateDefaultLocation(merged);
     }
     merged.catalogVersion = seed.catalogVersion;
+    merged.revokedAuthUsers = merged.revokedAuthUsers || [];
     merged.users = ensureSeedUsers(merged.users || []);
     local = merged;
   } catch {
     local = structuredClone(seed);
   }
+  await migratePasswords(local);
+  stripLegacyPasswords(local);
   const remote = await loadSupabaseState(local);
   return remote || local;
 }
@@ -274,45 +440,54 @@ function ensureSeedUsers(users) {
   return users.map((user) => ({
     username: user.username || user.name,
     password: user.password || "123456",
+    visiblePassword: user.visiblePassword || (!isPasswordHash(user.password) ? user.password : ""),
     phone: user.phone || "",
     ...user
-  }));
+  })).map((user) => {
+    if (user.id === "u-knight" || user.username === "Knight") {
+      const legacyEmail = !user.email || user.email === "knight@lab.local";
+      return { ...user, email: legacyEmail ? KNIGHT_EMAIL : user.email, role: "superadmin" };
+    }
+    return user;
+  });
 }
 
 function saveState() {
+  stripLegacyPasswords(state);
   localStorage.setItem(STORE_KEY, JSON.stringify(state));
   saveSupabaseState();
 }
 
 async function loadSupabaseState(localState) {
-  const config = window.LABDM_SUPABASE;
-  if (!config?.url || !config?.anonKey) return null;
+  const client = await ensureSupabaseClient();
+  if (!client) return null;
   try {
-    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
-    backend = {
-      type: "supabase",
-      client: createClient(config.url, config.anonKey),
-      ready: true,
-      saving: false,
-      pending: false
-    };
-    const { data, error } = await backend.client
+    const { data, error } = await client
       .from(SUPABASE_TABLE)
       .select("data")
       .eq("id", SUPABASE_STATE_KEY)
       .maybeSingle();
     if (error) throw error;
     if (!data?.data) {
-      await backend.client.from(SUPABASE_TABLE).upsert({
+      await client.from(SUPABASE_TABLE).upsert({
         id: SUPABASE_STATE_KEY,
-        data: { ...localState, activeUserId: "" },
+        data: stripLegacyPasswords({ ...localState, activeUserId: "" }),
         updated_at: new Date().toISOString()
       });
       return localState;
     }
     const remote = normalizeLoadedState(data.data);
+    const migratedPasswords = await migratePasswords(remote);
+    stripLegacyPasswords(remote);
     remote.activeUserId = remote.users.some((user) => user.id === localState.activeUserId) ? localState.activeUserId : "";
     localStorage.setItem(STORE_KEY, JSON.stringify(remote));
+    if (migratedPasswords) {
+      await client.from(SUPABASE_TABLE).upsert({
+        id: SUPABASE_STATE_KEY,
+        data: { ...remote, activeUserId: "" },
+        updated_at: new Date().toISOString()
+      });
+    }
     return remote;
   } catch (error) {
     console.warn("Supabase unavailable, using local storage.", error);
@@ -330,6 +505,7 @@ function normalizeLoadedState(value) {
     migrateDefaultLocation(merged);
   }
   merged.catalogVersion = seed.catalogVersion;
+  merged.revokedAuthUsers = merged.revokedAuthUsers || [];
   merged.users = ensureSeedUsers(merged.users || []);
   return merged;
 }
@@ -359,10 +535,10 @@ function saveSupabaseState() {
 }
 
 function sharedStateSnapshot() {
-  return {
+  return stripLegacyPasswords({
     ...state,
     activeUserId: ""
-  };
+  });
 }
 
 function nextDate(days) {
@@ -417,6 +593,31 @@ function route() {
 }
 
 function render() {
+  try {
+    renderUnsafe();
+  } catch (error) {
+    console.error("Render error:", error);
+    stopScanner();
+    app.innerHTML = `
+      <main class="login-page">
+        <section class="login-card">
+          <div class="brand">
+            <div class="brand-mark">LD</div>
+            <div>
+              <h1>LabDM</h1>
+              <p>应用渲染异常</p>
+            </div>
+          </div>
+          <p class="meta">页面渲染时发生错误，请刷新后重试。</p>
+          <pre style="white-space:pre-wrap;word-break:break-word;color:var(--muted);font-size:12px">${escapeHtml(error.message)}</pre>
+          <button class="btn primary" onclick="location.reload()">刷新页面</button>
+        </section>
+      </main>
+    `;
+  }
+}
+
+function renderUnsafe() {
   const { path, parts } = route();
   const isPublicDetail = (parts[0] === "equipment" && parts[1]) || (parts[0] === "t" && parts[1]);
 
@@ -586,7 +787,7 @@ function loginView() {
           </div>
           <div class="field">
             <label>邮箱</label>
-            <input name="email" type="email" />
+            <input name="email" type="email" autocomplete="email" required />
           </div>
           <div class="field">
             <label>联系电话</label>
@@ -602,7 +803,7 @@ function loginView() {
             : `
         <form class="grid" data-form="login">
           <div class="field">
-            <label>用户名</label>
+            <label>用户名或邮箱</label>
             <input name="username" autocomplete="username" required />
           </div>
           <div class="field">
@@ -1074,6 +1275,7 @@ function labelCard(item) {
 function accountsView() {
   if (!isAdminUser()) return notFoundView();
   return `
+    ${isSuperAdmin() ? revokedUsersNotice() : ""}
     <section class="workspace">
       <div class="panel">
         <div class="panel-head"><h3>账户</h3></div>
@@ -1087,8 +1289,7 @@ function accountsView() {
           <form class="grid" data-form="account">
             <div class="field"><label>用户名</label><input name="username" required /></div>
             <div class="field"><label>姓名</label><input name="name" required /></div>
-            <div class="field"><label>密码</label><input name="password" required type="password" /></div>
-            <div class="field"><label>邮箱</label><input name="email" type="email" /></div>
+            <div class="field"><label>邮箱</label><input name="email" type="email" required /></div>
             <div class="field"><label>联系电话</label><input name="phone" type="tel" /></div>
             <div class="field"><label>部门/课题组</label><input name="department" /></div>
             <div class="field">
@@ -1098,7 +1299,8 @@ function accountsView() {
                 <option value="user">学生</option>
               </select>
             </div>
-            <button class="btn primary" type="submit">创建账户</button>
+            <p class="meta">这里只预建账户资料。用户需要用相同邮箱在注册页创建 Supabase Auth 账号。</p>
+            <button class="btn primary" type="submit">创建账户资料</button>
           </form>
         </div>
       </aside>
@@ -1154,6 +1356,40 @@ function accountsView() {
   `;
 }
 
+function revokedUsersNotice() {
+  const items = (state.revokedAuthUsers || []).filter((item) => !item.dismissedAt);
+  if (!items.length) return "";
+  return `
+    <section class="panel">
+      <div class="panel-head">
+        <h3>待清理 Supabase Auth 用户</h3>
+        <a class="btn ghost" href="${SUPABASE_AUTH_USERS_URL}" target="_blank" rel="noreferrer">打开 Supabase 用户管理</a>
+      </div>
+      <div class="panel-body">
+        <div class="delete-list">
+          ${items.map((item) => {
+            const key = revokedUserKey(item);
+            return `
+              <div class="revoked-user-row">
+                <div>
+                  <strong>${escapeHtml(item.name || item.username || item.email || "已注销账户")}</strong>
+                  <div class="meta">邮箱：${escapeHtml(item.email || "未记录")}；用户名：${escapeHtml(item.username || "未记录")}</div>
+                  <div class="meta">注销时间：${escapeHtml(formatDateTime(item.deletedAt))}</div>
+                </div>
+                <button class="btn" data-action="dismiss-revoked-user" data-key="${escapeAttr(key)}">已手动删除</button>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function revokedUserKey(item) {
+  return item.authId || item.email || item.username || item.deletedAt || "";
+}
+
 function accountsTable() {
   return `
     <table>
@@ -1168,7 +1404,7 @@ function accountsTable() {
               <td>
                 <strong>${escapeHtml(user.name)}</strong>
                 <div class="meta">用户名：${escapeHtml(user.username)}；邮箱：${escapeHtml(user.email || "无邮箱")}</div>
-                ${isSuperAdmin() ? `<div class="meta">当前密码：${escapeHtml(user.password)}</div>` : ""}
+                ${isSuperAdmin() ? `<div class="meta">当前密码：${escapeHtml(user.visiblePassword || "未记录")}</div>` : ""}
               </td>
               <td>
                 ${canEditRole ? `
@@ -1189,7 +1425,7 @@ function accountsTable() {
               </td>
               <td>
                 ${user.id === currentUser().id ? `<button class="btn" data-action="change-password">修改密码</button>` : ""}
-                ${canManage ? `<button class="btn" data-action="reset-password" data-id="${user.id}">重置密码</button>` : ""}
+                ${canManage ? `<button class="btn" data-action="reset-password" data-id="${user.id}">发送改密邮件</button>` : ""}
                 ${canDelete ? `<button class="btn danger" data-action="delete-user" data-id="${user.id}">注销账户</button>` : ""}
               </td>
             </tr>
@@ -1251,6 +1487,8 @@ function handleAction(action, target) {
   }
 
   if (action === "logout") {
+    backend.client?.auth.signOut();
+    authUser = null;
     state.activeUserId = "";
     saveState();
     stopScanner();
@@ -1271,6 +1509,8 @@ function handleAction(action, target) {
   if (action === "change-password") return changePassword();
 
   if (action === "delete-user") return deleteUser(target.dataset.id);
+
+  if (action === "dismiss-revoked-user") return dismissRevokedUser(target.dataset.key);
 
   if (action === "toggle-equipment-selection") return toggleEquipmentSelection(target.checked);
 
@@ -1348,27 +1588,27 @@ async function handleSubmit(form) {
   }
 
   if (formType === "login") {
-    login(data);
+    await login(data);
     return;
   }
 
   if (formType === "self-register") {
-    selfRegister(data);
+    await selfRegister(data);
     return;
   }
 
   if (formType === "reset-password") {
-    submitResetPassword(data);
+    await submitResetPassword(data);
     return;
   }
 
   if (formType === "profile") {
-    submitProfile(data);
+    await submitProfile(data);
     return;
   }
 
   if (formType === "change-password") {
-    submitChangePassword(data);
+    await submitChangePassword(data);
     return;
   }
 
@@ -1423,7 +1663,7 @@ async function handleSubmit(form) {
   }
 
   if (formType === "account") {
-    createAccount(data);
+    await createAccount(data);
     return;
   }
 
@@ -1437,15 +1677,31 @@ async function handleSubmit(form) {
   }
 }
 
-function login(data) {
+async function login(data) {
   const username = data.username.trim();
-  const password = data.password;
-  const user = state.users.find((item) => item.username === username && item.password === password);
-  if (!user) {
-    toast("用户名或密码错误");
+  const email = authEmailForLogin(username);
+  const client = await ensureSupabaseClient();
+  if (!client) {
+    toast("Supabase Auth 未配置，无法登录");
     return;
   }
-  state.activeUserId = user.id;
+  const { data: authData, error } = await client.auth.signInWithPassword({
+    email,
+    password: data.password
+  });
+  if (error || !authData.user) {
+    toast(error?.message || "用户名或密码错误");
+    return;
+  }
+  if (isRevokedAuthUser(authData.user)) {
+    await client.auth.signOut();
+    toast("该账户已注销，无法登录");
+    return;
+  }
+  authUser = authData.user;
+  const profile = ensureProfileForAuthUser(authData.user, { username, visiblePassword: data.password });
+  state.activeUserId = profile.id;
+  stripLegacyPasswords(state);
   saveState();
   const next = new URLSearchParams(window.location.search).get("next");
   navigate(next || "/");
@@ -1816,7 +2072,7 @@ async function createEquipment(data) {
   navigate(`/equipment/${item.id}`);
 }
 
-function createAccount(data) {
+async function createAccount(data) {
   if (!isAdminUser()) {
     toast("只有管理员可以创建账户");
     return;
@@ -1830,39 +2086,81 @@ function createAccount(data) {
     toast("用户名已存在");
     return;
   }
+  const email = data.email.trim();
+  if (!email) {
+    toast("Supabase Auth 账户必须填写邮箱");
+    return;
+  }
+  if (state.users.some((user) => user.email?.toLowerCase() === email.toLowerCase())) {
+    toast("邮箱已存在");
+    return;
+  }
   state.users.push({
     id: `u-${crypto.randomUUID()}`,
     username,
-    password: data.password,
     name: data.name.trim(),
-    email: data.email.trim(),
+    email,
     phone: data.phone?.trim() || "",
     role: data.role,
     department: data.department.trim()
   });
+  state.passwordVersion = PASSWORD_VERSION;
   saveState();
-  toast("账户已创建");
+  toast("账户资料已创建。请让用户用该邮箱自助注册 Auth 账号。");
   render();
 }
 
-function selfRegister(data) {
+async function selfRegister(data) {
   const username = data.username.trim();
-  if (state.users.some((user) => user.username === username)) {
+  const email = data.email.trim();
+  if (!email) {
+    toast("请输入邮箱");
+    return;
+  }
+  const existing = state.users.find((user) => user.username === username);
+  if (existing && (existing.authId || existing.email?.toLowerCase() !== email.toLowerCase())) {
     toast("用户名已存在");
     return;
   }
-  const user = {
-    id: `u-${crypto.randomUUID()}`,
-    username,
+  const client = await ensureSupabaseClient();
+  if (!client) {
+    toast("Supabase Auth 未配置，无法注册");
+    return;
+  }
+  const { data: authData, error } = await client.auth.signUp({
+    email,
     password: data.password,
+    options: {
+      data: {
+        username,
+        name: data.name.trim(),
+        phone: data.phone?.trim() || "",
+        department: data.department.trim(),
+        role: "user"
+      }
+    }
+  });
+  if (error) {
+    toast(error.message);
+    return;
+  }
+  if (!authData.session) {
+    toast("注册已提交，请先完成邮箱验证后再登录");
+    navigate(`/login${window.location.search}`);
+    return;
+  }
+  authUser = authData.user;
+  const user = ensureProfileForAuthUser(authData.user, {
+    username,
     name: data.name.trim(),
-    email: data.email.trim(),
+    email,
     phone: data.phone?.trim() || "",
-    role: "user",
-    department: data.department.trim()
-  };
-  state.users.push(user);
+    department: data.department.trim(),
+    visiblePassword: data.password,
+    role: "user"
+  });
   state.activeUserId = user.id;
+  stripLegacyPasswords(state);
   saveState();
   const next = new URLSearchParams(window.location.search).get("next");
   navigate(next || "/");
@@ -1963,10 +2261,37 @@ function submitDeleteUser(data) {
     toast("请输入用户名确认注销");
     return;
   }
+  state.revokedAuthUsers = state.revokedAuthUsers || [];
+  state.revokedAuthUsers.push({
+    authId: user.authId || "",
+    email: user.email || "",
+    username: user.username || "",
+    name: user.name || "",
+    deletedAt: new Date().toISOString(),
+    deletedBy: currentUser()?.id || "",
+    needsManualAuthDelete: true,
+    dismissedAt: ""
+  });
   state.users = state.users.filter((item) => item.id !== user.id);
   saveState();
   modal = null;
-  toast("账户已注销");
+  if (isSuperAdmin()) {
+    modal = { type: "auth-delete-reminder", user };
+    render();
+    return;
+  }
+  toast("账户已注销，已通知超级管理员手动清理 Supabase Auth 用户");
+  render();
+}
+
+function dismissRevokedUser(key) {
+  if (!isSuperAdmin()) return;
+  const target = (state.revokedAuthUsers || []).find((item) => revokedUserKey(item) === key);
+  if (!target) return;
+  target.dismissedAt = new Date().toISOString();
+  target.dismissedBy = currentUser()?.id || "";
+  saveState();
+  toast("已标记为手动删除");
   render();
 }
 
@@ -2078,7 +2403,7 @@ function editProfile() {
   render();
 }
 
-function submitProfile(data) {
+async function submitProfile(data) {
   if (!modal || modal.type !== "profile") return;
   const user = currentUser();
   if (!user) return;
@@ -2091,14 +2416,38 @@ function submitProfile(data) {
     toast("用户名已存在");
     return;
   }
+  const client = await ensureSupabaseClient();
+  const email = data.email.trim();
+  const requestedEmailChange = Boolean(email && email !== authUser?.email);
+  if (client && authUser) {
+    const updates = {
+      data: {
+        username,
+        name: data.name.trim(),
+        phone: data.phone.trim(),
+        department: data.department.trim()
+      }
+    };
+    if (email && email !== authUser.email) updates.email = email;
+    const { data: authData, error } = await client.auth.updateUser(updates);
+    if (error) {
+      toast(error.message);
+      return;
+    }
+    authUser = authData.user || authUser;
+  }
   user.username = username;
   user.name = data.name.trim();
-  user.email = data.email.trim();
+  user.email = authUser?.email || email;
   user.phone = data.phone.trim();
   user.department = data.department.trim();
   saveState();
   modal = null;
   render();
+  if (requestedEmailChange && authUser?.email !== email) {
+    toast("资料已保存。邮箱变更需确认邮件，确认前继续使用原邮箱登录。");
+    return;
+  }
   toast("个人资料已更新");
 }
 
@@ -2118,34 +2467,51 @@ function resetPassword(userId) {
   render();
 }
 
-function submitResetPassword(data) {
+async function submitResetPassword(data) {
   if (!modal || modal.type !== "reset-password") return;
   const user = state.users.find((item) => item.id === modal.userId);
   if (!user) return;
-  if (!data.password) {
-    toast("请输入新密码");
+  if (!user.email) {
+    toast("该账户没有邮箱，无法发送改密邮件");
     return;
   }
-  user.password = data.password;
-  saveState();
+  const client = await ensureSupabaseClient();
+  if (!client) {
+    toast("Supabase Auth 未配置，无法发送改密邮件");
+    return;
+  }
+  const { error } = await client.auth.resetPasswordForEmail(user.email, {
+    redirectTo: `${window.location.origin}/login`
+  });
+  if (error) {
+    toast(error.message);
+    return;
+  }
   modal = null;
   render();
-  toast("密码已重置");
+  toast("改密邮件已发送");
 }
 
-function submitChangePassword(data) {
+async function submitChangePassword(data) {
   if (!modal || modal.type !== "change-password") return;
   const user = currentUser();
   if (!user) return;
-  if (user.password !== data.currentPassword) {
-    toast("当前密码不正确");
-    return;
-  }
   if (!data.password || data.password !== data.confirmPassword) {
     toast("两次输入的新密码不一致");
     return;
   }
-  user.password = data.password;
+  const client = await ensureSupabaseClient();
+  if (!client || !authUser) {
+    toast("请先登录 Supabase Auth 后再修改密码");
+    return;
+  }
+  const { error } = await client.auth.updateUser({ password: data.password });
+  if (error) {
+    toast(error.message);
+    return;
+  }
+  user.visiblePassword = data.password;
+  stripLegacyPasswords(state);
   saveState();
   modal = null;
   render();
@@ -2357,12 +2723,8 @@ function modalView() {
           <div class="panel-body">
             <form class="grid" data-form="change-password">
               <div class="field">
-                <label>当前密码</label>
-                <input name="currentPassword" type="password" autocomplete="current-password" required autofocus />
-              </div>
-              <div class="field">
                 <label>新密码</label>
-                <input name="password" type="password" autocomplete="new-password" required />
+                <input name="password" type="password" autocomplete="new-password" required autofocus />
               </div>
               <div class="field">
                 <label>确认新密码</label>
@@ -2382,17 +2744,13 @@ function modalView() {
       <div class="modal-backdrop" role="presentation">
         <section class="modal" role="dialog" aria-modal="true" aria-labelledby="reset-title">
           <div class="panel-head">
-            <h3 id="reset-title">重置密码</h3>
+            <h3 id="reset-title">发送改密邮件</h3>
             <button class="btn ghost" data-action="close-modal">关闭</button>
           </div>
           <div class="panel-body">
             <form class="grid" data-form="reset-password">
-              <p class="meta">为 ${escapeHtml(user.name)} 设置新密码。</p>
-              <div class="field">
-                <label>新密码</label>
-                <input name="password" type="password" autocomplete="new-password" required autofocus />
-              </div>
-              <button class="btn primary" type="submit">保存新密码</button>
+              <p class="meta">向 ${escapeHtml(user.email || "未设置邮箱")} 发送 Supabase 密码重置邮件。</p>
+              <button class="btn primary" type="submit">发送改密邮件</button>
             </form>
           </div>
         </section>
@@ -2548,13 +2906,33 @@ function modalView() {
           </div>
           <div class="panel-body">
             <form class="grid" data-form="delete-user">
-              <p class="meta">将注销 ${escapeHtml(user.name)} 的账户。审计流水会保留历史记录。</p>
+              <p class="meta">将注销 ${escapeHtml(user.name)} 的应用账户，并在本应用内禁用该 Supabase Auth 用户继续登录。审计流水会保留历史记录。</p>
+              <p class="meta">Supabase Auth 控制台中的用户记录不会被浏览器端删除；如需彻底清理，请在 Authentication / Users 中手动删除 ${escapeHtml(user.email || user.username)}。</p>
+              ${isSuperAdmin() ? `<a class="btn ghost" href="${SUPABASE_AUTH_USERS_URL}" target="_blank" rel="noreferrer">打开 Supabase 用户管理</a>` : ""}
               <div class="field">
                 <label>输入用户名确认</label>
                 <input name="confirm" required autocomplete="off" placeholder="${escapeAttr(user.username)}" />
               </div>
               <button class="btn danger" type="submit">确认注销</button>
             </form>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+  if (modal.type === "auth-delete-reminder") {
+    const user = modal.user;
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="auth-delete-title">
+          <div class="panel-head">
+            <h3 id="auth-delete-title">账户已注销</h3>
+            <button class="btn ghost" data-action="close-modal">关闭</button>
+          </div>
+          <div class="panel-body grid">
+            <p class="meta">${escapeHtml(user.name)} 的应用账户已注销，并已在本应用内禁用继续登录。</p>
+            <p class="meta">请到 Supabase Auth 用户管理页手动删除 ${escapeHtml(user.email || user.username)}。</p>
+            <a class="btn primary" href="${SUPABASE_AUTH_USERS_URL}" target="_blank" rel="noreferrer">打开 Supabase 用户管理</a>
           </div>
         </section>
       </div>

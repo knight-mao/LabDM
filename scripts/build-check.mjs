@@ -1,4 +1,5 @@
 import { access } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 
 const required = [
   "index.html",
@@ -14,6 +15,11 @@ const required = [
 
 for (const file of required) {
   await access(file);
+}
+
+const syntaxCheck = spawnSync(process.execPath, ["--check", "src/app.js"], { stdio: "inherit" });
+if (syntaxCheck.status !== 0) {
+  process.exit(syntaxCheck.status ?? 1);
 }
 
 console.log("Build check passed.");
